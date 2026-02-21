@@ -258,15 +258,18 @@ async function renderCharts() {
             pointRadius: 3,
             tension: 0.3,
         }));
-        // Reference lines
-        datasets.push({
-            label: '50% Line',
-            data: [{ x: 0, y: 50 }],
-            borderColor: '#4b5563',
-            borderDash: [6, 3],
-            borderWidth: 1,
-            pointRadius: 0,
-        });
+        // 50% reference line — needs real x-values from data to render
+        const allWinX = allCharts.flatMap(c => (c.winRateSeries || []).map(p => p.t));
+        if (allWinX.length >= 2) {
+            datasets.push({
+                label: '50% Line',
+                data: [{ x: allWinX[0], y: 50 }, { x: allWinX[allWinX.length - 1], y: 50 }],
+                borderColor: '#4b5563',
+                borderDash: [6, 3],
+                borderWidth: 1,
+                pointRadius: 0,
+            });
+        }
 
         winRateChart = new Chart(document.getElementById('winrate-chart'), {
             type: 'line',
