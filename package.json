@@ -1,0 +1,18 @@
+{
+  "name": "forge",
+  "version": "1.0.0",
+  "description": "FORGE - APEX Companion Trader Research System",
+  "main": "forge.js",
+  "type": "module",
+  "scripts": {
+    "start": "node forge.js",
+    "now": "node forge.js --now",
+    "test-data": "node test-data.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "dotenv": "^16.4.7",
+    "googleapis": "^144.0.0",
+    "node-cron": "^3.0.3"
+  }
+}
