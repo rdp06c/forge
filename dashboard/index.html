@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FORGE Dashboard</title>
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+
+<div class="header">
+    <h1>FORGE</h1>
+    <span id="cycle-id" class="badge badge-gray">--</span>
+    <span id="regime-badge" class="badge badge-gray">--</span>
+    <div class="header-meta">
+        <span>VIX: <strong id="vix-level">--</strong></span>
+        <span>Updated: <strong id="last-updated">--</strong></span>
+        <span id="stale-warning" class="stale-warning" style="display:none">DATA MAY BE STALE</span>
+    </div>
+</div>
+
+<nav class="nav">
+    <button class="active" data-view="overview">Daily Overview</button>
+    <button data-view="charts">Charts</button>
+    <button data-view="detail" id="detail-tab" style="display:none">Agent Detail</button>
+</nav>
+
+<!-- View 1: Daily Overview -->
+<div id="view-overview" class="view active">
+    <div class="agent-grid" id="agent-grid"></div>
+</div>
+
+<!-- View 2: Charts -->
+<div id="view-charts" class="view">
+    <div class="charts-container">
+        <div class="chart-box">
+            <h3>Portfolio Value Over Time</h3>
+            <div id="value-chart-empty" class="chart-empty" style="display:none">Data accumulates daily — charts appear after 3+ data points</div>
+            <canvas id="value-chart"></canvas>
+        </div>
+        <div class="chart-box">
+            <h3>Win Rate Over Time</h3>
+            <div id="winrate-chart-empty" class="chart-empty" style="display:none">Win rate data appears as trades close</div>
+            <canvas id="winrate-chart"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- View 3: Agent Detail -->
+<div id="view-detail" class="view">
+    <button class="detail-back" onclick="showView('overview')">&larr; Back to Overview</button>
+    <div id="detail-content"></div>
+</div>
+
+<script>
+// --- State ---
+let agentsData = null;
+let currentDetailAgent = null;
+let valueChart = null;
+let winRateChart = null;
+
+const AGENT_COLORS = {
+    Ember: '#f59e0b', Strike: '#ef4444', Flux: '#a855f7',
+    Draft: '#3b82f6', Alloy: '#22c55e'
+};
+
+// --- Navigation ---
+document.querySelectorAll('.nav button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        const view = btn.dataset.view;
+        if (view === 'detail' && !currentDetailAgent) return;
+        showView(view);
+    });
+});
+
+function showView(name) {
+    document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+    document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+    document.getElementById(`view-${name}`).classList.add('active');
+    document.querySelector(`.nav button[data-view="${name}"]`)?.classList.add('active');
+    if (name === 'charts') renderCharts();
+}
+
+// --- Data fetching ---
+async function fetchData() {
+    try {
+        const res = await fetch('/api/agents');
+        agentsData = await res.json();
+        renderOverview();
+        updateHeader();
+    } catch (e) {
+        console.error('Failed to fetch agents:', e);
+    }
+}
+
+function updateHeader() {
+    if (!agentsData?.agents?.length) return;
+    const first = agentsData.agents.find(a => a.metrics);
+    if (!first?.metrics) return;
+
+    const m = first.metrics;
+    document.getElementById('cycle-id').textContent = m.cycleId || 'Cycle 1';
+
+    const regimeBadge = document.getElementById('regime-badge');
+    if (m.regime) {
+        regimeBadge.textContent = m.regime.toUpperCase();
+        regimeBadge.className = `badge badge-${m.regime}`;
+    }
+
+    if (m.vix) {
+        document.getElementById('vix-level').textContent = m.vix.level?.toFixed(2) || '--';
+    }
+
+    if (m.lastUpdated) {
+        const d = new Date(m.lastUpdated);
+        document.getElementById('last-updated').textContent = d.toLocaleDateString('en-US', {
+            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+        });
+        const hoursSince = (Date.now() - d.getTime()) / 3600000;
+        document.getElementById('stale-warning').style.display = hoursSince > 48 ? '' : 'none';
+    }
+}
+
+// --- Daily Overview ---
+function renderOverview() {
+    const grid = document.getElementById('agent-grid');
+    if (!agentsData?.agents) { grid.innerHTML = '<div class="agent-error">Failed to load data</div>'; return; }
+
+    grid.innerHTML = agentsData.agents.map(agent => {
+        if (agent.error || !agent.metrics) {
+            return `<div class="agent-card" data-agent="${agent.name}">
+                <div class="card-header"><h3>${agent.fullName || agent.name}</h3></div>
+                <div class="agent-error">${agent.error || 'No data'}</div>
+            </div>`;
+        }
+        const m = agent.metrics;
+        return `<div class="agent-card" data-agent="${agent.name}" onclick="openDetail('${agent.name}')">
+            <div class="card-header">
+                <h3>${agent.name}</h3>
+                ${winRateBadge(m.winRate)}
+            </div>
+            <div class="card-thesis">${agent.thesis}</div>
+            <div class="card-stats">
+                <div class="stat">
+                    <span class="stat-label">Value</span>
+                    <span class="stat-value">$${fmt(m.value)}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Cash</span>
+                    <span class="stat-value">$${fmt(m.cash)}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Deployed</span>
+                    <span class="stat-value">${m.deployedPct}%</span>
+                </div>
+            </div>
+            <div class="card-stats">
+                <div class="stat">
+                    <span class="stat-label">Total P&L</span>
+                    <span class="stat-value ${m.totalReturnPct >= 0 ? 'positive' : 'negative'}">
+                        ${m.totalReturnPct >= 0 ? '+' : ''}${m.totalReturnPct}%
+                    </span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Closed</span>
+                    <span class="stat-value">${m.closedTradeCount}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Adherence</span>
+                    ${adherenceBadge(m.adherence)}
+                </div>
+            </div>
+            ${positionsList(m.positions)}
+            ${activityList(m.todayTrades)}
+        </div>`;
+    }).join('');
+}
+
+function positionsList(positions) {
+    if (!positions.length) return `<div class="positions-header">Positions</div><div class="empty-state">No positions — sitting flat</div>`;
+    return `<div class="positions-header">Open Positions (${positions.length})</div>` +
+        positions.map(p => `<div class="position-row">
+            <span class="position-symbol">${p.symbol}</span>
+            <span class="position-detail">${p.shares} sh @ $${p.entryPrice?.toFixed(2) || '?'}</span>
+            <span class="position-detail">${p.daysHeld !== null ? p.daysHeld + 'd' : ''}</span>
+            <span class="position-detail">C:${p.conviction || '?'}</span>
+        </div>`).join('');
+}
+
+function activityList(trades) {
+    if (!trades.length) return '';
+    return `<div class="positions-header">Recent Activity</div>` +
+        trades.map(t => `<div class="activity-row">
+            <span class="activity-type ${t.type.toLowerCase()}">${t.type}</span>
+            <span class="position-symbol">${t.symbol}</span>
+            <span class="position-detail">${t.shares} sh @ $${t.price?.toFixed(2)}</span>
+            <span class="activity-reasoning" onclick="this.classList.toggle('expanded')">${truncate(t.reasoning, 60)}</span>
+        </div>`).join('');
+}
+
+// --- Charts ---
+async function renderCharts() {
+    const names = ['Ember', 'Strike', 'Flux', 'Draft', 'Alloy'];
+    const allCharts = await Promise.all(names.map(async n => {
+        const res = await fetch(`/api/agent/${n}/charts`);
+        return res.json();
+    }));
+
+    // Value chart
+    const hasValueData = allCharts.some(c => c.valueSeries?.length > 2);
+    document.getElementById('value-chart-empty').style.display = hasValueData ? 'none' : '';
+    document.getElementById('value-chart').style.display = hasValueData ? '' : 'none';
+
+    if (hasValueData) {
+        if (valueChart) valueChart.destroy();
+        const datasets = allCharts.map((c, i) => ({
+            label: names[i],
+            data: (c.valueSeries || []).map(p => ({ x: p.t, y: p.v })),
+            borderColor: AGENT_COLORS[names[i]],
+            backgroundColor: AGENT_COLORS[names[i]] + '20',
+            borderWidth: 2,
+            pointRadius: 2,
+            tension: 0.3,
+        }));
+        // $50K reference line
+        datasets.push({
+            label: '$50K Baseline',
+            data: allCharts[0]?.valueSeries?.length ? [
+                { x: allCharts[0].valueSeries[0].t, y: 50000 },
+                { x: allCharts[0].valueSeries[allCharts[0].valueSeries.length - 1].t, y: 50000 }
+            ] : [],
+            borderColor: '#4b5563',
+            borderDash: [6, 3],
+            borderWidth: 1,
+            pointRadius: 0,
+        });
+
+        valueChart = new Chart(document.getElementById('value-chart'), {
+            type: 'line',
+            data: { datasets },
+            options: chartOptions('$'),
+        });
+    }
+
+    // Win rate chart
+    const hasWinData = allCharts.some(c => c.winRateSeries?.length > 2);
+    document.getElementById('winrate-chart-empty').style.display = hasWinData ? 'none' : '';
+    document.getElementById('winrate-chart').style.display = hasWinData ? '' : 'none';
+
+    if (hasWinData) {
+        if (winRateChart) winRateChart.destroy();
+        const datasets = allCharts.map((c, i) => ({
+            label: names[i],
+            data: (c.winRateSeries || []).map(p => ({ x: p.t, y: p.v })),
+            borderColor: AGENT_COLORS[names[i]],
+            borderWidth: 2,
+            pointRadius: 3,
+            tension: 0.3,
+        }));
+        // Reference lines
+        datasets.push({
+            label: '50% Line',
+            data: [{ x: 0, y: 50 }],
+            borderColor: '#4b5563',
+            borderDash: [6, 3],
+            borderWidth: 1,
+            pointRadius: 0,
+        });
+
+        winRateChart = new Chart(document.getElementById('winrate-chart'), {
+            type: 'line',
+            data: { datasets },
+            options: chartOptions('%'),
+        });
+    }
+}
+
+function chartOptions(unit) {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+            legend: {
+                labels: { color: '#8b8fa3', font: { family: 'inherit', size: 11 } }
+            },
+            tooltip: {
+                callbacks: {
+                    label: ctx => `${ctx.dataset.label}: ${unit === '$' ? '$' + ctx.parsed.y.toLocaleString() : ctx.parsed.y.toFixed(1) + '%'}`
+                }
+            }
+        },
+        scales: {
+            x: {
+                type: 'category',
+                ticks: { color: '#5a5e72', font: { size: 10 }, maxTicksLimit: 15 },
+                grid: { color: '#1f2233' },
+            },
+            y: {
+                ticks: {
+                    color: '#5a5e72',
+                    font: { size: 10 },
+                    callback: v => unit === '$' ? '$' + v.toLocaleString() : v + '%'
+                },
+                grid: { color: '#1f2233' },
+            }
+        }
+    };
+}
+
+// --- Agent Detail ---
+async function openDetail(name) {
+    currentDetailAgent = name;
+    document.getElementById('detail-tab').style.display = '';
+    showView('detail');
+
+    const res = await fetch(`/api/agent/${name}`);
+    const agent = await res.json();
+    if (agent.error) {
+        document.getElementById('detail-content').innerHTML = `<div class="agent-error">${agent.error}</div>`;
+        return;
+    }
+
+    const m = agent.metrics;
+    const chartRes = await fetch(`/api/agent/${name}/charts`);
+    const chartData = await chartRes.json();
+
+    let html = `
+    <div class="detail-header" style="border-left: 3px solid ${AGENT_COLORS[name]}">
+        <h2>${agent.fullName}</h2>
+        <div class="thesis">${agent.thesis}</div>
+        <div class="desc">${agent.description}</div>
+        <div style="margin-top:8px; font-size:12px; color:var(--text-muted)">
+            Entry: ${agent.entryFramework} | Exit: ${agent.exitFramework} | Framework: ${agent.framework}
+        </div>
+    </div>
+
+    <div class="detail-stats">
+        <div class="detail-stat-card">
+            <div class="stat-label">Value</div>
+            <div class="stat-value">$${fmt(m.value)}</div>
+        </div>
+        <div class="detail-stat-card">
+            <div class="stat-label">Cash</div>
+            <div class="stat-value">$${fmt(m.cash)}</div>
+        </div>
+        <div class="detail-stat-card">
+            <div class="stat-label">Deployed</div>
+            <div class="stat-value">${m.deployedPct}%</div>
+        </div>
+        <div class="detail-stat-card">
+            <div class="stat-label">Return</div>
+            <div class="stat-value ${m.totalReturnPct >= 0 ? 'positive' : 'negative'}">${m.totalReturnPct >= 0 ? '+' : ''}${m.totalReturnPct}%</div>
+        </div>
+        <div class="detail-stat-card">
+            <div class="stat-label">Win Rate</div>
+            <div class="stat-value">${m.winRate !== null ? m.winRate + '%' : '--'}</div>
+        </div>
+        <div class="detail-stat-card">
+            <div class="stat-label">Adherence</div>
+            <div class="stat-value">${m.adherence !== null ? m.adherence + '%' : '--'}</div>
+        </div>
+    </div>
+
+    <div class="chart-box" style="margin-bottom:16px">
+        <h3>${name} Portfolio Value</h3>
+        <canvas id="detail-value-chart" height="200"></canvas>
+    </div>`;
+
+    // Open positions table
+    if (m.positions.length > 0) {
+        html += `<div class="table-section">
+            <h3>Open Positions (${m.positions.length})</h3>
+            <div class="table-wrap"><table class="data-table">
+                <tr><th>Symbol</th><th>Shares</th><th>Entry</th><th>Conviction</th><th>Days Held</th><th>RS</th><th>RSI</th><th>Structure</th></tr>
+                ${m.positions.map(p => `<tr>
+                    <td><strong>${p.symbol}</strong></td>
+                    <td>${p.shares}</td>
+                    <td>$${p.entryPrice?.toFixed(2) || '?'}</td>
+                    <td>${p.conviction || '?'}/10</td>
+                    <td>${p.daysHeld ?? '--'}</td>
+                    <td>${p.entryRS ?? '--'}</td>
+                    <td>${p.entryRSI ?? '--'}</td>
+                    <td>${p.entryStructure || '--'}</td>
+                </tr>`).join('')}
+            </table></div>
+        </div>`;
+    }
+
+    // Closed trades table
+    const closed = agent.closedTrades || [];
+    if (closed.length > 0) {
+        html += `<div class="table-section">
+            <h3>Closed Trades (${closed.length})</h3>
+            <div class="table-wrap"><table class="data-table">
+                <tr><th>Symbol</th><th>Entry</th><th>Exit</th><th>P&L</th><th>Return</th><th>Hold</th><th>Exit Reason</th><th>Thesis</th><th>Notes</th></tr>
+                ${closed.map(t => {
+                    const holdDays = t.holdTime ? Math.round(t.holdTime / 86400000) : '--';
+                    const exitReason = t.exitReason || 'unknown';
+                    const qualified = t.forgeMetadata?.thesisQualified;
+                    const notes = t.forgeMetadata?.thesisAdherenceNotes || '';
+                    return `<tr>
+                        <td><strong>${t.symbol}</strong></td>
+                        <td>$${t.buyPrice?.toFixed(2)}</td>
+                        <td>$${t.sellPrice?.toFixed(2)}</td>
+                        <td class="${t.profitLoss >= 0 ? 'positive' : 'negative'}">$${t.profitLoss?.toFixed(2)}</td>
+                        <td class="${t.returnPercent >= 0 ? 'positive' : 'negative'}">${t.returnPercent >= 0 ? '+' : ''}${t.returnPercent?.toFixed(1)}%</td>
+                        <td>${holdDays}d</td>
+                        <td><span class="badge badge-${exitReason}">${exitReason.replace(/_/g, ' ')}</span></td>
+                        <td>${qualified === true ? '<span class="badge badge-green">YES</span>' : qualified === false ? '<span class="badge badge-red">NO</span>' : '<span class="badge badge-gray">--</span>'}</td>
+                        <td class="expandable" onclick="this.classList.toggle('expanded')">${notes || '--'}</td>
+                    </tr>`;
+                }).join('')}
+            </table></div>
+        </div>`;
+    } else {
+        html += `<div class="table-section"><h3>Closed Trades</h3><div style="padding:20px;text-align:center" class="empty-state">No closed trades yet</div></div>`;
+    }
+
+    document.getElementById('detail-content').innerHTML = html;
+
+    // Render individual chart
+    if (chartData.valueSeries?.length > 0) {
+        new Chart(document.getElementById('detail-value-chart'), {
+            type: 'line',
+            data: {
+                datasets: [{
+                    label: name,
+                    data: chartData.valueSeries.map(p => ({ x: p.t, y: p.v })),
+                    borderColor: AGENT_COLORS[name],
+                    backgroundColor: AGENT_COLORS[name] + '20',
+                    fill: true,
+                    borderWidth: 2,
+                    pointRadius: 2,
+                    tension: 0.3,
+                }, {
+                    label: 'Baseline',
+                    data: [
+                        { x: chartData.valueSeries[0].t, y: 50000 },
+                        { x: chartData.valueSeries[chartData.valueSeries.length - 1].t, y: 50000 }
+                    ],
+                    borderColor: '#4b5563',
+                    borderDash: [6, 3],
+                    borderWidth: 1,
+                    pointRadius: 0,
+                }]
+            },
+            options: chartOptions('$'),
+        });
+    }
+}
+
+// --- Helpers ---
+function fmt(n) {
+    if (n == null) return '--';
+    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function truncate(s, len) {
+    if (!s) return '';
+    return s.length > len ? s.substring(0, len) + '...' : s;
+}
+
+function winRateBadge(rate) {
+    if (rate === null) return '<span class="badge badge-gray">--</span>';
+    if (rate >= 60) return `<span class="badge badge-green">${rate}% WR</span>`;
+    if (rate >= 45) return `<span class="badge badge-yellow">${rate}% WR</span>`;
+    return `<span class="badge badge-red">${rate}% WR</span>`;
+}
+
+function adherenceBadge(pct) {
+    if (pct === null) return '<span class="badge badge-gray">--</span>';
+    if (pct >= 100) return `<span class="badge badge-green">${pct}%</span>`;
+    if (pct >= 80) return `<span class="badge badge-yellow">${pct}%</span>`;
+    return `<span class="badge badge-red">${pct}%</span>`;
+}
+
+// --- Init ---
+fetchData();
+setInterval(fetchData, 60000);
+</script>
+</body>
+</html>
