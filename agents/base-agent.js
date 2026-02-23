@@ -20,7 +20,7 @@ export class BaseAgent {
     async runCycle(sharedData) {
         console.log(`\n[${ this.name }] Starting cycle...`);
         const portfolio = loadPortfolio(this.name);
-        const { enhanced, scored, sectorRotation, vix, marketData } = sharedData;
+        const { enhanced, scored, sectorRotation, vix, marketData, regime: centralRegime } = sharedData;
 
         // Build candidate pool
         const candidates = this.buildCandidatePool(scored, portfolio, enhanced);
@@ -38,11 +38,11 @@ export class BaseAgent {
         let phase1Results = null;
         const holdingSymbols = Object.keys(portfolio.holdings);
         if (holdingSymbols.length > 0) {
-            phase1Results = await this.runPhase1(portfolio, enhanced, vix, scored);
+            phase1Results = await this.runPhase1(portfolio, enhanced, vix, scored, centralRegime);
         }
 
-        // Determine regime
-        const regime = phase1Results?.regime || this.inferRegime(vix);
+        // Use centralized regime — determined once in forge.js for all agents
+        const regime = centralRegime || this.inferRegime(vix);
         portfolio.lastMarketRegime = { regime, timestamp: new Date().toISOString() };
         portfolio.lastSectorRotation = { timestamp: new Date().toISOString(), sectors: sectorRotation };
         if (vix) portfolio.lastVIX = { ...vix, fetchedAt: new Date().toISOString() };
@@ -132,7 +132,7 @@ export class BaseAgent {
     /**
      * Phase 1: Holdings review
      */
-    async runPhase1(portfolio, enhanced, vix, scored) {
+    async runPhase1(portfolio, enhanced, vix, scored, centralRegime) {
         console.log(`  [${this.name}] Phase 1: Reviewing ${Object.keys(portfolio.holdings).length} holdings...`);
 
         // Top buy opportunities for context
@@ -141,12 +141,12 @@ export class BaseAgent {
             .slice(0, 5)
             .map(s => `${s.symbol} (score:${s.compositeScore.toFixed(1)})`);
 
-        const prompt = buildPhase1Prompt(this.config, portfolio, enhanced, vix, topBuyOps);
+        const prompt = buildPhase1Prompt(this.config, portfolio, enhanced, vix, topBuyOps, centralRegime);
         const rawResponse = await callClaude(prompt);
         const parsed = parseDecisionResponse(rawResponse);
 
         const sells = [];
-        const regime = parsed.market_regime || this.inferRegime(vix);
+        const regime = centralRegime;
 
         if (parsed.decisions) {
             for (const d of parsed.decisions) {
@@ -189,7 +189,7 @@ export class BaseAgent {
             sectorSummary[sector] = { moneyFlow: data.moneyFlow, rotationSignal: data.rotationSignal, avgReturn5d: data.avgReturn5d };
         }
 
-        const prompt = buildPhase2Prompt(this.config, portfolio, filteredCandidates, sectorSummary, vix, phase1Results);
+        const prompt = buildPhase2Prompt(this.config, portfolio, filteredCandidates, sectorSummary, vix, phase1Results, regime);
         const rawResponse = await callClaude(prompt);
         const parsed = parseDecisionResponse(rawResponse);
 

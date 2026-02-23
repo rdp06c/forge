@@ -62,7 +62,7 @@ function formatHoldings(portfolio, enhancedData) {
     return JSON.stringify(holdingsObj);
 }
 
-export function buildPhase1Prompt(agentConfig, portfolio, enhancedData, vix, topBuyOpportunities) {
+export function buildPhase1Prompt(agentConfig, portfolio, enhancedData, vix, topBuyOpportunities, regime) {
     const agentName = agentConfig.name;
     const holdingsStr = formatHoldings(portfolio, enhancedData);
     const recentTx = (portfolio.transactions || []).slice(-10).reverse()
@@ -106,11 +106,12 @@ STOP-LOSS: -5% note, -10% re-evaluate, -15% deep review, -20% hard stop
 
 Portfolio Cash: $${portfolio.cash.toFixed(2)}
 ${vix ? `VIX: ${vix.level.toFixed(1)} (${vix.interpretation}${vix.trend !== 'stable' ? ', ' + vix.trend : ''})` : ''}
+Market Regime: ${regime || 'choppy'} (determined centrally — do not override)
 Holdings: ${holdingsStr}
 Recent Transactions: ${recentTx}
 
 JSON ONLY response:
-{ "decisions": [{ "action": "SELL" or "HOLD", "symbol": "X", "shares": N, "conviction": 1-10, "reasoning": "..." }], "holdings_summary": "...", "market_regime": "bull/bear/choppy" }
+{ "decisions": [{ "action": "SELL" or "HOLD", "symbol": "X", "shares": N, "conviction": 1-10, "reasoning": "..." }], "holdings_summary": "..." }
 Include a decision for EVERY holding.`;
 }
 
@@ -257,7 +258,7 @@ You will have flat days. That is correct behavior — depth over breadth.`;
     return '';
 }
 
-export function buildPhase2Prompt(agentConfig, portfolio, filteredData, sectorSummary, vix, phase1Results) {
+export function buildPhase2Prompt(agentConfig, portfolio, filteredData, sectorSummary, vix, phase1Results, regime) {
     const agentName = agentConfig.name;
     const buyFramework = getAgentBuyFramework(agentConfig);
 
@@ -285,6 +286,7 @@ Today: ${TODAY()}.
 AGENT THESIS: ${agentConfig.thesis}
 ${phase1Context}
 ${vix ? `VIX: ${vix.level.toFixed(1)} (${vix.interpretation}${vix.trend !== 'stable' ? ', ' + vix.trend : ''})` : ''}
+Market Regime: ${regime || 'choppy'} (determined centrally — use this for deployment limits)
 
 ${buyFramework}
 ${sizingRef}
@@ -302,5 +304,5 @@ THESIS DISCIPLINE: Every decision must be justifiable under your thesis rules. I
 IMPORTANT: Each symbol may appear AT MOST ONCE in your decisions. Do not recommend the same stock twice.
 
 JSON ONLY response:
-{ "decisions": [{ "action": "BUY", "symbol": "X", "shares": N, "conviction": 1-10, "reasoning": "..."${agentName === 'Strike' ? ', "expectedTarget": N, "mechanicalExit": N' : ''} }], "market_regime": "bull/bear/choppy", "thesis_adherence": "summary of how decisions align with ${agentName}'s thesis" }`;
+{ "decisions": [{ "action": "BUY", "symbol": "X", "shares": N, "conviction": 1-10, "reasoning": "..."${agentName === 'Strike' ? ', "expectedTarget": N, "mechanicalExit": N' : ''} }], "thesis_adherence": "summary of how decisions align with ${agentName}'s thesis" }`;
 }
