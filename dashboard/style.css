@@ -377,6 +377,8 @@ body {
     background: var(--bg-hover);
 }
 
+.data-table tr.clickable { cursor: pointer; }
+
 .table-section {
     background: var(--bg-card);
     border: 1px solid var(--border);
@@ -423,6 +425,287 @@ body {
     text-align: center;
 }
 
+/* --- F4: Summary Banner --- */
+
+.summary-banner {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 16px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 16px;
+    align-items: center;
+}
+
+.summary-banner .stat {
+    text-align: center;
+}
+
+.summary-banner .stat-value {
+    font-size: 18px;
+}
+
+.summary-banner .stat-trade {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+/* --- F3: Trade Modal --- */
+
+.modal-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(0, 0, 0, 0.7);
+    z-index: 1000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+}
+
+.modal-content {
+    background: var(--bg-primary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    max-width: 720px;
+    width: 100%;
+    max-height: 85vh;
+    overflow-y: auto;
+    padding: 24px;
+    position: relative;
+}
+
+.modal-close {
+    position: absolute;
+    top: 12px; right: 16px;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 24px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.modal-close:hover { color: var(--text-primary); }
+
+.modal-header {
+    margin-bottom: 20px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.modal-header h2 {
+    font-size: 18px;
+    margin-bottom: 4px;
+}
+
+.modal-section {
+    margin-bottom: 16px;
+}
+
+.modal-section h4 {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 8px;
+}
+
+.modal-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 8px;
+}
+
+.modal-grid-item {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+}
+
+.modal-grid-item .label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.modal-grid-item .value {
+    font-size: 13px;
+    font-weight: 600;
+    margin-top: 2px;
+}
+
+.modal-text {
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 1.6;
+}
+
+/* --- F2: Compare Mode --- */
+
+.compare-controls {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+}
+
+.compare-controls select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 13px;
+    cursor: pointer;
+}
+
+.compare-controls select:focus { border-color: var(--blue); outline: none; }
+
+.compare-controls span {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.compare-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.compare-table th, .compare-table td {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+}
+
+.compare-table th {
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.compare-table td.winner {
+    background: rgba(34, 197, 94, 0.08);
+    color: var(--green);
+    font-weight: 600;
+}
+
+.compare-table td.loser {
+    color: var(--text-secondary);
+}
+
+/* --- F6: Sector Heatmap --- */
+
+.heatmap-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+}
+
+.heatmap-table th, .heatmap-table td {
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    text-align: center;
+}
+
+.heatmap-table th {
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.heatmap-table td {
+    font-weight: 600;
+    font-size: 11px;
+}
+
+.heatmap-table td.sector-label {
+    text-align: left;
+    color: var(--text-secondary);
+    font-weight: 400;
+    background: var(--bg-card);
+}
+
+/* --- F10: Leaderboard --- */
+
+.leaderboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.leaderboard-header h3 {
+    font-size: 16px;
+    color: var(--text-primary);
+}
+
+.leaderboard-header select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+    cursor: pointer;
+}
+
+.leaderboard-header select:focus { border-color: var(--blue); outline: none; }
+
+.leaderboard-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+}
+
+.leaderboard-table th, .leaderboard-table td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+}
+
+.leaderboard-table th {
+    color: var(--text-muted);
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 600;
+}
+
+.leaderboard-table tr:hover td { background: var(--bg-hover); }
+.leaderboard-table tr { cursor: pointer; }
+
+.leaderboard-rank {
+    font-size: 16px;
+    font-weight: 700;
+    color: var(--text-muted);
+    width: 30px;
+}
+
+.sparkline-cell {
+    width: 80px;
+    height: 30px;
+}
+
+.sparkline-cell canvas {
+    width: 80px;
+    height: 30px;
+}
+
 /* --- Responsive --- */
 
 @media (max-width: 600px) {
@@ -431,4 +714,7 @@ body {
     .agent-grid { grid-template-columns: 1fr; }
     .card-stats { grid-template-columns: 1fr 1fr; }
     .nav button { padding: 10px 14px; font-size: 12px; }
+    .nav { overflow-x: auto; flex-wrap: nowrap; }
+    .modal-content { padding: 16px; }
+    .summary-banner { grid-template-columns: 1fr 1fr; }
 }

@@ -7,6 +7,14 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const PORTFOLIOS_DIR = join(__dirname, '..', 'portfolios');
 const PORT = 3000;
 
+// Stock sectors — loaded for sector heatmap and compare features
+let stockSectors = {};
+try {
+    const constantsPath = join(__dirname, '..', 'config', 'constants.js');
+    const mod = await import('file://' + constantsPath.replace(/\\/g, '/'));
+    stockSectors = mod.stockSectors || {};
+} catch { /* falls back to closedTrades.sector field */ }
+
 // Agent metadata (inline to avoid importing ESM config with side-effect risk)
 const AGENT_META = {
     Ember:  { fullName: 'Ember — The Patience Agent', color: '#f59e0b', thesis: 'Does extreme selectivity with a simplified decision model outperform APEX\'s complex multi-factor approach?', description: 'Stripped-down 3-factor model: catalyst strength, technical structure, sector context. Only trades at 10/10 conviction.', framework: '3-factor-only', entryFramework: 'custom', exitFramework: 'apex' },
@@ -29,6 +37,14 @@ function loadPortfolio(name) {
     }
 }
 
+function loadAllPortfolios() {
+    const portfolios = {};
+    for (const name of AGENT_NAMES) {
+        portfolios[name] = loadPortfolio(name);
+    }
+    return portfolios;
+}
+
 // --- Computed metrics ---
 
 function computeMetrics(portfolio) {
@@ -40,7 +56,6 @@ function computeMetrics(portfolio) {
     const holdings = portfolio.holdings || {};
     const theses = portfolio.holdingTheses || {};
 
-    // Portfolio value from last performance snapshot
     const lastSnap = perf.length > 0 ? perf[perf.length - 1] : null;
     const value = lastSnap ? lastSnap.value : portfolio.initialBalance;
     const cash = portfolio.cash;
@@ -48,28 +63,23 @@ function computeMetrics(portfolio) {
         ? ((1 - cash / lastSnap.value) * 100)
         : (value > 0 ? ((1 - cash / value) * 100) : 0);
 
-    // Win rate
     const wins = closed.filter(t => t.profitLoss > 0).length;
     const winRate = closed.length > 0 ? (wins / closed.length * 100) : null;
 
-    // Thesis adherence
     const qualified = closed.filter(t => t.forgeMetadata?.thesisQualified === true).length;
     const adherence = closed.length > 0 ? (qualified / closed.length * 100) : null;
 
-    // Total P&L
     const totalPL = closed.reduce((sum, t) => sum + (t.profitLoss || 0), 0);
     const totalReturnPct = portfolio.initialBalance > 0
         ? ((value - portfolio.initialBalance) / portfolio.initialBalance * 100)
         : 0;
 
-    // Today's activity — match most recent transaction date
     let todayTrades = [];
     if (txns.length > 0) {
         const lastDate = txns[txns.length - 1].timestamp?.substring(0, 10);
         todayTrades = txns.filter(t => t.timestamp?.substring(0, 10) === lastDate);
     }
 
-    // Open positions
     const positions = Object.entries(holdings).map(([symbol, shares]) => {
         const thesis = theses[symbol] || {};
         const entryDate = thesis.entryDate || null;
@@ -77,19 +87,16 @@ function computeMetrics(portfolio) {
             ? Math.floor((Date.now() - new Date(entryDate).getTime()) / 86400000)
             : null;
         return {
-            symbol,
-            shares,
+            symbol, shares,
             entryPrice: thesis.entryPrice || null,
             conviction: thesis.entryConviction || null,
-            entryDate,
-            daysHeld,
+            entryDate, daysHeld,
             entryRS: thesis.entryRS || null,
             entryRSI: thesis.entryRSI || null,
             entryStructure: thesis.entryStructure || null,
         };
     });
 
-    // Regime and VIX
     const regime = portfolio.lastMarketRegime?.regime || null;
     const vix = portfolio.lastVIX || null;
 
@@ -105,8 +112,7 @@ function computeMetrics(portfolio) {
         openPositionCount: positions.length,
         positions,
         todayTrades,
-        regime,
-        vix,
+        regime, vix,
         cycleId: portfolio.cycleId,
         lastUpdated: lastSnap?.timestamp || null,
     };
@@ -119,10 +125,8 @@ function buildChartData(portfolio) {
     const closed = portfolio.closedTrades || [];
     const regimeHist = portfolio.regimeHistory || [];
 
-    // Performance history time series
     const valueSeries = perf.map(p => ({ t: p.timestamp, v: p.value, regime: p.regime }));
 
-    // Running win rate over closed trades
     let wins = 0;
     const winRateSeries = closed.map((trade, i) => {
         if (trade.profitLoss > 0) wins++;
@@ -132,19 +136,169 @@ function buildChartData(portfolio) {
         };
     });
 
-    // Regime timeline
+    // F7: Adherence timeline — running thesis adherence over closed trades
+    let qualifiedCount = 0;
+    const adherenceSeries = closed.map((trade, i) => {
+        if (trade.forgeMetadata?.thesisQualified === true) qualifiedCount++;
+        return {
+            t: trade.sellDate || trade.buyDate,
+            v: Math.round((qualifiedCount / (i + 1)) * 1000) / 10,
+        };
+    });
+
     const regimeTimeline = regimeHist.length > 0
         ? regimeHist.map(r => ({ t: r.timestamp, regime: r.regime }))
         : perf.map(p => ({ t: p.timestamp, regime: p.regime }));
 
-    return { valueSeries, winRateSeries, regimeTimeline };
+    return { valueSeries, winRateSeries, adherenceSeries, regimeTimeline };
+}
+
+// --- New computation functions ---
+
+// F5: Group closed trades by setup type
+function computeSetupEffectiveness(closedTrades) {
+    const groups = {};
+    for (const t of closedTrades) {
+        const et = t.entryTechnicals || {};
+        let setupType = et.structure || 'Unknown';
+        if (et.bos && et.bosType) setupType += ` + ${et.bosType} BOS`;
+        else if (et.choch && et.chochType) setupType += ` + ${et.chochType} CHoCH`;
+
+        if (!groups[setupType]) groups[setupType] = { trades: 0, wins: 0, totalReturn: 0 };
+        groups[setupType].trades++;
+        if (t.profitLoss > 0) groups[setupType].wins++;
+        groups[setupType].totalReturn += t.returnPercent || 0;
+    }
+
+    return Object.entries(groups)
+        .map(([setup, g]) => ({
+            setup,
+            trades: g.trades,
+            wins: g.wins,
+            winRate: g.trades > 0 ? Math.round(g.wins / g.trades * 1000) / 10 : 0,
+            avgReturn: g.trades > 0 ? Math.round(g.totalReturn / g.trades * 100) / 100 : 0,
+        }))
+        .sort((a, b) => b.trades - a.trades);
+}
+
+// F9: Risk metrics from perf history and closed trades
+function computeRiskMetrics(portfolio) {
+    const perf = portfolio?.performanceHistory || [];
+    const closed = portfolio?.closedTrades || [];
+
+    // Max drawdown from perfHistory
+    let maxDrawdown = 0;
+    let peak = 0;
+    for (const p of perf) {
+        if (p.value > peak) peak = p.value;
+        const dd = peak > 0 ? (peak - p.value) / peak * 100 : 0;
+        if (dd > maxDrawdown) maxDrawdown = dd;
+    }
+
+    // Sharpe ratio from daily returns (annualized)
+    let sharpe = null;
+    if (perf.length > 2) {
+        const returns = [];
+        for (let i = 1; i < perf.length; i++) {
+            if (perf[i - 1].value > 0) {
+                returns.push((perf[i].value - perf[i - 1].value) / perf[i - 1].value);
+            }
+        }
+        if (returns.length > 1) {
+            const mean = returns.reduce((s, r) => s + r, 0) / returns.length;
+            const variance = returns.reduce((s, r) => s + (r - mean) ** 2, 0) / (returns.length - 1);
+            const stdDev = Math.sqrt(variance);
+            sharpe = stdDev > 0 ? (mean / stdDev) * Math.sqrt(252) : 0;
+        }
+    }
+
+    // Win/loss metrics
+    const winners = closed.filter(t => t.profitLoss > 0);
+    const losers = closed.filter(t => t.profitLoss < 0);
+
+    const avgWinner = winners.length > 0
+        ? winners.reduce((s, t) => s + t.returnPercent, 0) / winners.length : null;
+    const avgLoser = losers.length > 0
+        ? losers.reduce((s, t) => s + t.returnPercent, 0) / losers.length : null;
+    const winLossRatio = losers.length > 0 && winners.length > 0
+        ? Math.abs(avgWinner / avgLoser) : null;
+
+    const grossProfit = winners.reduce((s, t) => s + t.profitLoss, 0);
+    const grossLoss = Math.abs(losers.reduce((s, t) => s + t.profitLoss, 0));
+    const profitFactor = grossLoss > 0 ? grossProfit / grossLoss : null;
+
+    return {
+        maxDrawdown: Math.round(maxDrawdown * 100) / 100,
+        sharpe: sharpe !== null ? Math.round(sharpe * 100) / 100 : null,
+        winLossRatio: winLossRatio !== null ? Math.round(winLossRatio * 100) / 100 : null,
+        avgWinner: avgWinner !== null ? Math.round(avgWinner * 100) / 100 : null,
+        avgLoser: avgLoser !== null ? Math.round(avgLoser * 100) / 100 : null,
+        profitFactor: profitFactor !== null ? Math.round(profitFactor * 100) / 100 : null,
+    };
+}
+
+// F8: Bin hold times into 5 buckets
+function computeDurationDistribution(closedTrades) {
+    const bins = { '1d': 0, '2-3d': 0, '4-7d': 0, '1-2w': 0, '2w+': 0 };
+    for (const t of closedTrades) {
+        const days = t.holdTime ? Math.round(t.holdTime / 86400000) : 0;
+        if (days <= 1) bins['1d']++;
+        else if (days <= 3) bins['2-3d']++;
+        else if (days <= 7) bins['4-7d']++;
+        else if (days <= 14) bins['1-2w']++;
+        else bins['2w+']++;
+    }
+    return bins;
+}
+
+// F4: Aggregate summary across all agents
+function computeSummary(portfolios) {
+    let aggregatePL = 0;
+    let totalDeployed = 0;
+    let totalPositions = 0;
+    let bestTrade = null;
+    let worstTrade = null;
+    const today = new Date().toISOString().substring(0, 10);
+
+    for (const name of AGENT_NAMES) {
+        const p = portfolios[name];
+        if (!p) continue;
+        const perf = p.performanceHistory || [];
+        const lastSnap = perf.length > 0 ? perf[perf.length - 1] : null;
+        const value = lastSnap ? lastSnap.value : p.initialBalance;
+
+        aggregatePL += (value - (p.initialBalance || 50000));
+        totalDeployed += (value - p.cash);
+        totalPositions += Object.keys(p.holdings || {}).length;
+
+        // Best/worst trade today (by sellDate)
+        for (const t of (p.closedTrades || [])) {
+            const sellDay = t.sellDate?.substring(0, 10);
+            if (sellDay !== today) continue;
+            if (!bestTrade || t.profitLoss > bestTrade.profitLoss) {
+                bestTrade = { symbol: t.symbol, profitLoss: t.profitLoss, returnPercent: t.returnPercent, agent: name };
+            }
+            if (!worstTrade || t.profitLoss < worstTrade.profitLoss) {
+                worstTrade = { symbol: t.symbol, profitLoss: t.profitLoss, returnPercent: t.returnPercent, agent: name };
+            }
+        }
+    }
+
+    return {
+        aggregatePL: Math.round(aggregatePL * 100) / 100,
+        totalDeployed: Math.round(totalDeployed * 100) / 100,
+        totalPositions,
+        bestTrade,
+        worstTrade,
+    };
 }
 
 // --- API handlers ---
 
 function handleAgents(res) {
+    const portfolios = loadAllPortfolios();
     const agents = AGENT_NAMES.map(name => {
-        const portfolio = loadPortfolio(name);
+        const portfolio = portfolios[name];
         const metrics = computeMetrics(portfolio);
         return {
             name,
@@ -153,7 +307,8 @@ function handleAgents(res) {
             error: portfolio === null ? 'Portfolio not found or malformed' : null,
         };
     });
-    sendJSON(res, { agents, timestamp: new Date().toISOString() });
+    const summary = computeSummary(portfolios);
+    sendJSON(res, { agents, summary, timestamp: new Date().toISOString() });
 }
 
 function handleAgentDetail(res, name) {
@@ -164,15 +319,19 @@ function handleAgentDetail(res, name) {
     if (!portfolio) return sendJSON(res, { error: `Portfolio not found for ${name}` }, 404);
 
     const metrics = computeMetrics(portfolio);
+    const closedTrades = portfolio.closedTrades || [];
+
     sendJSON(res, {
         name,
         ...meta,
         metrics,
-        closedTrades: portfolio.closedTrades || [],
+        closedTrades,
         holdingTheses: portfolio.holdingTheses || {},
         transactions: portfolio.transactions || [],
         regimeHistory: portfolio.regimeHistory || [],
         sectorRotation: portfolio.lastSectorRotation || null,
+        setupEffectiveness: computeSetupEffectiveness(closedTrades),
+        riskMetrics: computeRiskMetrics(portfolio),
     });
 }
 
@@ -185,6 +344,142 @@ function handleAgentCharts(res, name) {
 
     const charts = buildChartData(portfolio);
     sendJSON(res, { name, ...charts });
+}
+
+// F2: Cross-agent comparison
+function handleCompare(res, params) {
+    const nameA = params.get('a');
+    const nameB = params.get('b');
+
+    if (!nameA || !nameB) return sendJSON(res, { error: 'Provide ?a=Name&b=Name' }, 400);
+    if (!AGENT_META[nameA]) return sendJSON(res, { error: `Unknown agent: ${nameA}` }, 404);
+    if (!AGENT_META[nameB]) return sendJSON(res, { error: `Unknown agent: ${nameB}` }, 404);
+
+    function agentStats(name) {
+        const portfolio = loadPortfolio(name);
+        if (!portfolio) return null;
+        const metrics = computeMetrics(portfolio);
+        const closed = portfolio.closedTrades || [];
+
+        // Avg hold duration
+        let avgHoldDays = null;
+        if (closed.length > 0) {
+            const totalDays = closed.reduce((s, t) => s + (t.holdTime ? t.holdTime / 86400000 : 0), 0);
+            avgHoldDays = Math.round(totalDays / closed.length * 10) / 10;
+        }
+
+        // Sector exposure (from closed trades + current holdings)
+        const sectorCounts = {};
+        for (const t of closed) {
+            const sec = t.sector || 'Unknown';
+            sectorCounts[sec] = (sectorCounts[sec] || 0) + 1;
+        }
+        for (const sym of Object.keys(portfolio.holdings || {})) {
+            const sec = stockSectors[sym] || 'Unknown';
+            sectorCounts[sec] = (sectorCounts[sec] || 0) + 1;
+        }
+
+        // Setup distribution
+        const setupCounts = {};
+        for (const t of closed) {
+            const et = t.entryTechnicals || {};
+            let setup = et.structure || 'Unknown';
+            if (et.bos && et.bosType) setup += ` + ${et.bosType} BOS`;
+            else if (et.choch && et.chochType) setup += ` + ${et.chochType} CHoCH`;
+            setupCounts[setup] = (setupCounts[setup] || 0) + 1;
+        }
+
+        return {
+            name,
+            color: AGENT_META[name].color,
+            returnPct: metrics?.totalReturnPct ?? 0,
+            winRate: metrics?.winRate,
+            avgHoldDays,
+            closedTrades: closed.length,
+            adherence: metrics?.adherence,
+            deployedPct: metrics?.deployedPct ?? 0,
+            sectorExposure: sectorCounts,
+            setupDistribution: setupCounts,
+        };
+    }
+
+    const a = agentStats(nameA);
+    const b = agentStats(nameB);
+    if (!a || !b) return sendJSON(res, { error: 'Could not load one or both portfolios' }, 404);
+
+    sendJSON(res, { a, b });
+}
+
+// F6: Sector × agent P&L grid
+function handleSectorHeatmap(res) {
+    const portfolios = loadAllPortfolios();
+    const grid = {}; // sector -> { agent -> totalPL }
+
+    for (const name of AGENT_NAMES) {
+        const p = portfolios[name];
+        if (!p) continue;
+        for (const t of (p.closedTrades || [])) {
+            const sector = t.sector || 'Unknown';
+            if (!grid[sector]) grid[sector] = {};
+            grid[sector][name] = (grid[sector][name] || 0) + (t.profitLoss || 0);
+        }
+        // Include current holdings sectors (with 0 P&L for exposure visibility)
+        for (const sym of Object.keys(p.holdings || {})) {
+            const sector = stockSectors[sym] || 'Unknown';
+            if (!grid[sector]) grid[sector] = {};
+            if (grid[sector][name] === undefined) grid[sector][name] = 0;
+        }
+    }
+
+    // Round values
+    for (const sector of Object.keys(grid)) {
+        for (const name of Object.keys(grid[sector])) {
+            grid[sector][name] = Math.round(grid[sector][name] * 100) / 100;
+        }
+    }
+
+    sendJSON(res, { grid, agents: AGENT_NAMES });
+}
+
+// F8: Duration distribution per agent
+function handleDurationDistribution(res) {
+    const portfolios = loadAllPortfolios();
+    const result = {};
+    for (const name of AGENT_NAMES) {
+        const p = portfolios[name];
+        result[name] = computeDurationDistribution(p?.closedTrades || []);
+    }
+    sendJSON(res, { distributions: result, agents: AGENT_NAMES });
+}
+
+// F10: All agents ranked
+function handleLeaderboard(res) {
+    const portfolios = loadAllPortfolios();
+    const entries = AGENT_NAMES.map(name => {
+        const p = portfolios[name];
+        if (!p) return { name, color: AGENT_META[name].color, error: true };
+
+        const metrics = computeMetrics(p);
+        const risk = computeRiskMetrics(p);
+        const perf = p.performanceHistory || [];
+
+        // Sparkline data: last 10 performance values
+        const sparkline = perf.slice(-10).map(s => s.value);
+
+        return {
+            name,
+            color: AGENT_META[name].color,
+            returnPct: metrics?.totalReturnPct ?? 0,
+            winRate: metrics?.winRate,
+            sharpe: risk.sharpe,
+            adherence: metrics?.adherence,
+            maxDrawdown: risk.maxDrawdown,
+            closedTrades: metrics?.closedTradeCount ?? 0,
+            sparkline,
+        };
+    });
+
+    sendJSON(res, { entries });
 }
 
 // --- Static file serving ---
@@ -218,20 +513,26 @@ function sendJSON(res, data, status = 200) {
 // --- Router ---
 
 const server = createServer((req, res) => {
-    const url = req.url.split('?')[0];
+    const [urlPath, queryString] = req.url.split('?');
+    const params = new URLSearchParams(queryString || '');
 
     // API routes
-    if (url === '/api/agents') return handleAgents(res);
+    if (urlPath === '/api/agents') return handleAgents(res);
+    if (urlPath === '/api/compare') return handleCompare(res, params);
+    if (urlPath === '/api/sector-heatmap') return handleSectorHeatmap(res);
+    if (urlPath === '/api/duration-distribution') return handleDurationDistribution(res);
+    if (urlPath === '/api/leaderboard') return handleLeaderboard(res);
 
-    const agentDetailMatch = url.match(/^\/api\/agent\/(\w+)$/);
+    const agentDetailMatch = urlPath.match(/^\/api\/agent\/(\w+)$/);
     if (agentDetailMatch) return handleAgentDetail(res, agentDetailMatch[1]);
 
-    const agentChartsMatch = url.match(/^\/api\/agent\/(\w+)\/charts$/);
+    const agentChartsMatch = urlPath.match(/^\/api\/agent\/(\w+)\/charts$/);
     if (agentChartsMatch) return handleAgentCharts(res, agentChartsMatch[1]);
 
     // Static files
-    if (url === '/' || url === '/index.html') return serveStatic(res, 'index.html');
-    if (url === '/style.css') return serveStatic(res, 'style.css');
+    if (urlPath === '/' || urlPath === '/index.html') return serveStatic(res, 'index.html');
+    if (urlPath === '/style.css') return serveStatic(res, 'style.css');
+    if (urlPath.startsWith('/js/') && urlPath.endsWith('.js')) return serveStatic(res, urlPath.substring(1));
 
     res.writeHead(404);
     res.end('Not found');
