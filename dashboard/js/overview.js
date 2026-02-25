@@ -13,6 +13,7 @@ function renderSummaryBanner() {
     const s = data.summary;
     const plClass = s.aggregatePL >= 0 ? 'positive' : 'negative';
     const plSign = s.aggregatePL >= 0 ? '+' : '';
+    const pctSign = s.aggregateReturnPct >= 0 ? '+' : '';
 
     let bestHtml = '--';
     if (s.bestTrade) {
@@ -27,7 +28,7 @@ function renderSummaryBanner() {
     <div class="summary-banner">
         <div class="stat">
             <span class="stat-label">Aggregate P&L</span>
-            <span class="stat-value ${plClass}">${plSign}$${FORGE.fmt(Math.abs(s.aggregatePL))}</span>
+            <span class="stat-value ${plClass}">${plSign}$${FORGE.fmt(Math.abs(s.aggregatePL))} <small>(${pctSign}${s.aggregateReturnPct}%)</small></span>
         </div>
         <div class="stat">
             <span class="stat-label">Total Deployed</span>

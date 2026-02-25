@@ -19,7 +19,7 @@ try {
 const AGENT_META = {
     Ember:  { fullName: 'Ember — The Patience Agent', color: '#f59e0b', thesis: 'Does extreme selectivity with a simplified decision model outperform APEX\'s complex multi-factor approach?', description: 'Stripped-down 3-factor model: catalyst strength, technical structure, sector context. Only trades at 10/10 conviction.', framework: '3-factor-only', entryFramework: 'custom', exitFramework: 'apex' },
     Strike: { fullName: 'Strike — The Early Exit Agent', color: '#ef4444', thesis: 'Is APEX\'s profit-taking framework leaving money on the table?', description: 'Full APEX entry, mechanical exit at 55% of expected move.', framework: 'apex-entry-mechanical-exit', entryFramework: 'apex', exitFramework: 'mechanical' },
-    Flux:   { fullName: 'Flux — The Contrarian', color: '#a855f7', thesis: 'Is there genuine edge in fading overextended moves?', description: 'Inverts APEX entry logic. Enters fades when RS >85, momentum 8+, and reversal signs present.', framework: 'overextension-first', entryFramework: 'custom', exitFramework: 'tight-stop' },
+    Flux:   { fullName: 'Flux — The Dip Buyer', color: '#a855f7', thesis: 'Is APEX\'s momentum bias causing him to miss recoverable pullbacks?', description: 'Buys stocks down 8-25% over 5 days showing stabilization signs. Tests whether APEX\'s decline penalties filter out valid recoveries.', framework: 'pullback-first', entryFramework: 'custom', exitFramework: 'apex' },
     Draft:  { fullName: 'Draft — The Volume Agent', color: '#3b82f6', thesis: 'Should volume confirmation be a hard gate rather than a minor weighted factor?', description: 'Full APEX framework + hard volume gate. 1.5x ADV on breakouts, <0.7x on pullbacks.', framework: 'apex-plus-volume-gate', entryFramework: 'apex', exitFramework: 'apex' },
     Alloy:  { fullName: 'Alloy — The Setup Purist', color: '#22c55e', thesis: 'Does deep specialization in Bullish BOS produce a sharper edge than APEX\'s multi-setup approach?', description: 'Full APEX framework applied exclusively to Bullish BOS setups.', framework: 'apex-bos-only', entryFramework: 'apex', exitFramework: 'apex' },
 };
@@ -254,6 +254,7 @@ function computeDurationDistribution(closedTrades) {
 // F4: Aggregate summary across all agents
 function computeSummary(portfolios) {
     let aggregatePL = 0;
+    let totalInitialBalance = 0;
     let totalDeployed = 0;
     let totalPositions = 0;
     let bestTrade = null;
@@ -266,8 +267,10 @@ function computeSummary(portfolios) {
         const perf = p.performanceHistory || [];
         const lastSnap = perf.length > 0 ? perf[perf.length - 1] : null;
         const value = lastSnap ? lastSnap.value : p.initialBalance;
+        const initial = p.initialBalance || 50000;
 
-        aggregatePL += (value - (p.initialBalance || 50000));
+        aggregatePL += (value - initial);
+        totalInitialBalance += initial;
         totalDeployed += (value - p.cash);
         totalPositions += Object.keys(p.holdings || {}).length;
 
@@ -284,8 +287,13 @@ function computeSummary(portfolios) {
         }
     }
 
+    const aggregateReturnPct = totalInitialBalance > 0
+        ? Math.round(aggregatePL / totalInitialBalance * 10000) / 100
+        : 0;
+
     return {
         aggregatePL: Math.round(aggregatePL * 100) / 100,
+        aggregateReturnPct,
         totalDeployed: Math.round(totalDeployed * 100) / 100,
         totalPositions,
         bestTrade,
