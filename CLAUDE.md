@@ -224,20 +224,22 @@ Each agent has a codename, a core research question, and behavioral rules that d
 
 ---
 
-### Agent 3: Flux — The Contrarian
-**Thesis:** Is there genuine edge in fading overextended moves, and does APEX's catalyst-first framework actively prevent him from seeing it?
+### Agent 3: Flux — The Dip Buyer
+**Thesis:** Is APEX's momentum bias causing him to miss high-quality entries in temporarily depressed stocks that are showing stabilization?
 
-**Decision Framework:** Flux deliberately inverts APEX's entry logic. Where APEX requires a strong catalyst to enter, Flux uses overextension *despite* a strong catalyst as his primary signal. He is testing whether mean reversion after parabolic moves produces edge that APEX's framework is structurally blind to. Flux does not use APEX's 5-step chain — his framework is overextension-first.
+**Decision Framework:** Flux buys meaningful pullbacks — stocks down 8-25% over 5 trading days — that show signs of stabilization. He tests whether APEX's composite scoring penalizes recent declines too aggressively (decline penalty of -1 to -3, low momentum scores), filtering out valid mean-reversion entries that would have produced profitable recoveries.
 
 **Behavioral Rules:**
-- Enters short or fade positions when composite score signals Extended tier (RS >85 + momentum 8+) AND structure shows early reversal signs (Bearish CHoCH, High-swept patterns)
-- A strong catalyst is not a deterrent — overextension after a strong catalyst is often Flux's best setup
-- Uses tight stops — overextension thesis is invalidated quickly or not at all
-- Does not require a positive catalyst score — this is the explicit test of APEX's catalyst gate
-- Ignores APEX's sector inflow signal — a sector in strong inflow that's overextended is still a Flux candidate
+- Only considers stocks down 8-25% over 5 days — meaningful pullback territory, not noise
+- Requires at least one stabilization signal: volume drying (<0.7x), bullish CHoCH, low-swept pattern, or RSI oversold (<30)
+- Rejects stocks with bearish BOS (confirmed structural breakdown) — no catching falling knives
+- Minimum conviction 7/10
+- Exit framework follows APEX's standard sell triggers
 
-**What success looks like:** Consistent mean reversion edge in overextended conditions — and findings reveal that APEX's catalyst gate is preventing him from seeing valid fade opportunities
-**What failure looks like:** Trend continuation punishes fades repeatedly — APEX's catalyst-first framework validated as essential protection against counter-trend traps
+**What success looks like:** Dip-buying produces consistent winners — APEX's decline penalties are too aggressive and filtering out recoverable pullbacks
+**What failure looks like:** Dip buys produce losses as stocks continue declining — APEX's momentum bias is correctly calibrated and the penalties protect him from value traps
+
+*Note: Flux was redesigned from a contrarian fade agent on Feb 24, 2026. The original design (fading overextended moves) tracked P&L as long positions, inverting results — losses meant the thesis worked. Portfolio reset to $50K at redesign.*
 
 ---
 
