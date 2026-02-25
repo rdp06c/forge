@@ -43,20 +43,18 @@ export const AGENTS = {
 
     Flux: {
         name: 'Flux',
-        fullName: 'Flux — The Contrarian',
-        thesis: 'Is there genuine edge in fading overextended moves, and does APEX\'s catalyst-first framework actively prevent him from seeing it?',
-        framework: 'overextension-first',
-        description: 'Inverts APEX entry logic. Uses overextension as primary signal. Enters fade positions when RS >85 + momentum 8+ AND structure shows early reversal signs (Bearish CHoCH, High-swept patterns). Does NOT use APEX 5-step chain.',
+        fullName: 'Flux — The Dip Buyer',
+        thesis: 'Is APEX\'s momentum bias causing him to miss high-quality entries in temporarily depressed stocks that are showing stabilization?',
+        framework: 'pullback-first',
+        description: 'Buys meaningful pullbacks (down 8-25% over 5 days) in stocks showing stabilization signs: volume drying, bullish CHoCH, low-swept, or RSI oversold. Tests whether APEX\'s composite scoring penalizes recent declines too aggressively, filtering out valid mean-reversion entries.',
         rules: {
             minConviction: 7,
-            requireExtendedTier: true,  // RS >85 + momentum 8+
-            requireReversalSigns: true, // Bearish CHoCH or High-swept
-            useTightStops: true,
-            catalystNotRequired: true,
-            ignoreSectorInflow: true,   // Overextended sector inflow is a Flux candidate
+            pullbackRange: { min: -25, max: -8 },  // 5-day return between -25% and -8%
+            requireStabilization: true,  // Volume drying, bullish CHoCH, low-swept, or RSI < 30
+            rejectBearishBOS: true,      // Don't catch falling knives with confirmed breakdown
         },
         entryFramework: 'custom',
-        exitFramework: 'tight-stop',
+        exitFramework: 'apex',
         promptModifier: 'flux',
     },
 

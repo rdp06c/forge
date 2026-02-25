@@ -76,7 +76,7 @@ export function buildPhase1Prompt(agentConfig, portfolio, enhancedData, vix, top
 STRIKE-SPECIFIC EXIT RULE: You use MECHANICAL EXITS. For each holding, calculate 55% of the expected move (entry price to original price target). If the current price has reached or exceeded that 55% level, SELL regardless of momentum or other signals. This overrides APEX's flexible profit-taking framework. Stop-loss and catalyst failure triggers still apply normally.`;
     } else if (agentName === 'Flux') {
         sellFrameworkNote = `
-FLUX-SPECIFIC EXIT RULE: You use TIGHT STOPS on fade positions. If a position moves against the fade thesis (stock continues trending rather than reverting), exit quickly. Overextension thesis invalidates fast or not at all.`;
+FLUX-SPECIFIC EXIT RULE: You bought this stock as a dip/pullback recovery play. Your thesis is that the stock was temporarily oversold and would recover. If the stock continues to decline and breaks to new lows with bearish BOS (structural breakdown confirmed), the recovery thesis is broken — exit. If the stock is stabilizing or recovering, HOLD.`;
     }
 
     return `You are ${agentConfig.fullName}, a FORGE research agent. PHASE 1: HOLDINGS REVIEW ONLY.
@@ -178,30 +178,36 @@ This mechanical exit will override APEX's flexible profit-taking on the sell sid
     if (name === 'Flux') {
         return `
 ═══════════════════════════════════════════════════════════
-FLUX'S OVEREXTENSION-FIRST FADE FRAMEWORK
+FLUX'S DIP-BUYING FRAMEWORK
 ═══════════════════════════════════════════════════════════
 
-You INVERT APEX's entry logic. You look for OVEREXTENDED moves to FADE.
+You buy stocks that have pulled back HARD but are showing signs of STABILIZATION.
+APEX's composite scoring penalizes recent declines aggressively. You test whether those penalties
+filter out legitimate recovery entries.
 
 ENTRY CRITERIA (ALL required):
-1. EXTENDED TIER: RS >85 AND momentum 8+ (the stock has run hard)
-2. REVERSAL SIGNS: At least one of:
-   - Bearish CHoCH (was bullish, now making lower lows)
-   - High-swept (wick above swing high, closed below — liquidity taken)
-   - RSI >75 (overbought)
-   - Bearish MACD crossover
+1. MEANINGFUL PULLBACK: Stock is down 8-25% over the last 5 trading days
+   - Less than 8% is not a real dip — APEX handles these fine
+   - More than 25% is likely a fundamental blow-up, not a dip — avoid catching falling knives
 
-3. CONVICTION: 7/10 minimum even for fades
+2. STABILIZATION SIGNS: At least one of:
+   - Volume drying (volumeTrend < 0.7) — sellers exhausting
+   - Bullish CHoCH — was bearish, now making higher highs (reversal forming)
+   - Low-swept — wick below swing low, closed above (liquidity taken, buyers stepped in)
+   - RSI oversold (< 30) — statistical mean reversion territory
 
-A strong catalyst is NOT a deterrent — overextension AFTER a strong catalyst is often your best setup.
-You do NOT require a positive catalyst — this tests APEX's catalyst gate.
-You IGNORE sector inflow signals — overextended in a strong sector is still a fade candidate.
+3. NO STRUCTURAL BREAKDOWN: If the stock shows bearish BOS (break of structure confirmed
+   to the downside), the decline is structural, not a dip — PASS
 
-USE TIGHT STOPS: Your thesis invalidates quickly or not at all.
-If the stock breaks to new highs after your fade entry, you're wrong — exit fast.
+4. CONVICTION: 7/10 minimum
 
-NOTE: You are looking for MEAN REVERSION, not trend continuation.
-Your BUY is effectively a bet that the stock will pull back.`;
+WHAT YOU ARE TESTING: Whether APEX's decline penalties (-1 to -3 for today's drop, low
+momentum scores for 5-day losers) are correctly calibrated or overly aggressive. If your
+dip-buying produces consistent winners, APEX is missing recoveries. If you consistently
+lose, APEX's momentum bias is justified.
+
+You will have flat days when no stocks meet your criteria. That is correct behavior.
+Patience is essential — bad dip buys (catching knives) will corrupt the research data.`;
     }
 
     if (name === 'Draft') {
