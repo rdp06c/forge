@@ -41,6 +41,27 @@ export class BaseAgent {
             phase1Results = await this.runPhase1(portfolio, enhanced, vix, scored, centralRegime);
         }
 
+        // Enforce agent-specific exit rules (e.g., Strike's mechanical exits)
+        const forcedSells = this.enforceExitRules(portfolio, enhanced, vix);
+        for (const fs of forcedSells) {
+            const success = executeSell(portfolio, {
+                symbol: fs.symbol, shares: fs.shares, price: fs.price,
+                reasoning: fs.reasoning, exitReason: fs.exitReason,
+                marketData: enhanced, vix, agentName: this.name,
+                forgeMetadata: {
+                    cycleId: portfolio.cycleId,
+                    thesisQualified: true,
+                    thesisAdherenceNotes: fs.reasoning,
+                    decisionFrameworkUsed: this.config.exitFramework || 'mechanical_exit',
+                    regimeAtEntry: portfolio.lastMarketRegime?.regime || centralRegime,
+                },
+            });
+            if (success && phase1Results) {
+                phase1Results.sells = phase1Results.sells || [];
+                phase1Results.sells.push({ symbol: fs.symbol });
+            }
+        }
+
         // Use centralized regime — determined once in forge.js for all agents
         const regime = centralRegime || this.inferRegime(vix);
         portfolio.lastMarketRegime = { regime, timestamp: new Date().toISOString() };
@@ -278,7 +299,14 @@ export class BaseAgent {
                         symbol: d.symbol, shares, price, conviction: d.conviction,
                         reasoning: d.reasoning, marketData: enhanced, vix, agentName: this.name,
                     });
-                    if (success) boughtThisCycle.add(d.symbol);
+                    if (success) {
+                        boughtThisCycle.add(d.symbol);
+                        // Store Strike's mechanical exit targets in holdingTheses
+                        if (d.expectedTarget && d.mechanicalExit && portfolio.holdingTheses?.[d.symbol]) {
+                            portfolio.holdingTheses[d.symbol].expectedTarget = d.expectedTarget;
+                            portfolio.holdingTheses[d.symbol].mechanicalExit = d.mechanicalExit;
+                        }
+                    }
                 }
             }
         }
@@ -327,5 +355,13 @@ export class BaseAgent {
      */
     validateDecision(decision, candidateData, enhanced) {
         return true;
+    }
+
+    /**
+     * Enforce agent-specific exit rules before Phase 2 (override in subclass)
+     * Returns array of { symbol, shares, price, reasoning, exitReason }
+     */
+    enforceExitRules(portfolio, enhanced, vix) {
+        return [];
     }
 }

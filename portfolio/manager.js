@@ -20,10 +20,20 @@ export function calculatePositionSize(portfolio, conviction, regime, currentPric
     const maxDeployable = totalValue * ((regimeDeployment.min + regimeDeployment.max) / 2);
     const targetAllocation = Math.min(maxDeployable, totalValue * convictionMid);
 
-    // Adaptive deployment: if win rate in current regime < 45%, reduce by 15-20%
-    // (Would need trade history analysis — skip for now, apply in later cycles)
+    // Adaptive deployment: if win rate in current regime < 45%, reduce by 17.5%
+    let adjustedAllocation = targetAllocation;
+    const closedInRegime = (portfolio.closedTrades || []).filter(
+        t => (t.forgeMetadata?.regimeAtEntry || t.exitMarketRegime) === regime
+    );
+    if (closedInRegime.length >= 5) {
+        const wins = closedInRegime.filter(t => t.returnPercent > 0).length;
+        const winRate = wins / closedInRegime.length;
+        if (winRate < 0.45) {
+            adjustedAllocation *= 0.825; // Reduce by 17.5% (midpoint of 15-20%)
+        }
+    }
 
-    const shares = Math.floor(targetAllocation / currentPrice);
+    const shares = Math.floor(adjustedAllocation / currentPrice);
     const cost = shares * currentPrice;
 
     // Don't exceed available cash
@@ -38,6 +48,16 @@ export function calculatePositionSize(portfolio, conviction, regime, currentPric
  * Execute a BUY trade
  */
 export function executeBuy(portfolio, { symbol, shares, price, conviction, reasoning, marketData, vix, agentName }) {
+    // Rebuy cooldown: 5-day block after selling a symbol
+    const now = new Date();
+    const blocked = (portfolio.blockedTrades || []).find(
+        b => b.symbol === symbol && new Date(b.blockedUntil) > now
+    );
+    if (blocked) {
+        console.log(`  [${agentName}] Rebuy cooldown: ${symbol} blocked until ${blocked.blockedUntil.split('T')[0]}`);
+        return false;
+    }
+
     const cost = price * shares;
     if (portfolio.cash < cost) {
         console.log(`  [${agentName}] Insufficient cash for ${shares} ${symbol} @ $${price} (need $${cost.toFixed(2)}, have $${portfolio.cash.toFixed(2)})`);
@@ -144,6 +164,20 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
             console.log(`  [${agentName}] Anti-whipsaw: blocking same-day sell of ${symbol}`);
             return false;
         }
+
+        // Hold discipline: < 3 days — only sell if stop-loss triggered (-15% or worse)
+        const holdMs = Date.now() - new Date(buys[0].timestamp).getTime();
+        const holdDays = Math.floor(holdMs / 86400000);
+        if (holdDays < 3) {
+            const totalBuyCost = buys.reduce((s, t) => s + t.cost, 0);
+            const totalBuyShares = buys.reduce((s, t) => s + t.shares, 0);
+            const avgBuyPrice = totalBuyShares > 0 ? totalBuyCost / totalBuyShares : 0;
+            const returnPct = avgBuyPrice > 0 ? ((price - avgBuyPrice) / avgBuyPrice) * 100 : 0;
+            if (returnPct > -15) {
+                console.log(`  [${agentName}] Hold discipline: blocking sell of ${symbol} (held ${holdDays}d, return ${returnPct.toFixed(1)}%, need 3d or -15% stop)`);
+                return false;
+            }
+        }
     }
 
     const revenue = price * shares;
@@ -202,6 +236,14 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
 
         const plSign = profitLoss >= 0 ? '+' : '';
         console.log(`  [${agentName}] SELL ${shares} ${symbol} @ $${price.toFixed(2)} (${plSign}$${profitLoss.toFixed(2)}, ${plSign}${returnPercent.toFixed(1)}%)`);
+
+        // Rebuy cooldown: block re-entry for 5 days
+        portfolio.blockedTrades = portfolio.blockedTrades || [];
+        portfolio.blockedTrades.push({
+            symbol,
+            blockedUntil: new Date(Date.now() + 5 * 86400000).toISOString(),
+            reason: 'rebuy_cooldown',
+        });
     }
 
     portfolio.transactions.push({
