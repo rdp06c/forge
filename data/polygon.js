@@ -221,7 +221,19 @@ export async function fetchNewsForStocks(symbols) {
         return newsCache;
     }
 
-    console.log(`  Fetching news for ${uncached.length} stocks...`);
+    // Filter out after-hours news — only include articles published before 4 PM ET.
+    // FORGE runs at 5 PM ET, so without this filter, post-close news (earnings, etc.)
+    // would cause buys at the close price when the stock has already moved in AH.
+    const now = new Date();
+    const etNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const utcNow = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+    const etOffsetMs = utcNow.getTime() - etNow.getTime(); // ET-to-UTC offset (4h EDT, 5h EST)
+    const todayET = now.toLocaleDateString('en-CA', { timeZone: 'America/New_York' }); // YYYY-MM-DD
+    // 4 PM ET in UTC = 16:00 UTC + ET offset (so 20:00 or 21:00 UTC)
+    const marketCloseUtc = new Date(todayET + 'T16:00:00Z');
+    marketCloseUtc.setTime(marketCloseUtc.getTime() + etOffsetMs);
+
+    console.log(`  Fetching news for ${uncached.length} stocks (cutoff: ${marketCloseUtc.toISOString()})...`);
     const BATCH = 25;
     for (let i = 0; i < uncached.length; i += BATCH) {
         const batch = uncached.slice(i, i + BATCH);
@@ -229,12 +241,14 @@ export async function fetchNewsForStocks(symbols) {
             try {
                 const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
                 const response = await fetch(
-                    `${POLYGON_BASE}/v2/reference/news?ticker=${symbol}&limit=3&order=desc&sort=published_utc&published_utc.gte=${sevenDaysAgo}&apiKey=${API_KEY()}`
+                    `${POLYGON_BASE}/v2/reference/news?ticker=${symbol}&limit=5&order=desc&sort=published_utc&published_utc.gte=${sevenDaysAgo}&apiKey=${API_KEY()}`
                 );
                 if (!response.ok) return;
                 const data = await response.json();
                 if (data.results?.length > 0) {
-                    newsCache[symbol] = data.results.map(article => {
+                    // Only keep articles published before today's market close (4 PM ET)
+                    const filtered = data.results.filter(a => new Date(a.published_utc) <= marketCloseUtc);
+                    newsCache[symbol] = filtered.slice(0, 3).map(article => {
                         const insight = (article.insights || []).find(ins => ins.ticker === symbol);
                         return {
                             title: article.title,
