@@ -291,6 +291,21 @@ function computeSummary(portfolios) {
         ? Math.round(aggregatePL / totalInitialBalance * 10000) / 100
         : 0;
 
+    // SPY baseline from any portfolio (all share the same baseline)
+    let spyReturn = null;
+    for (const name of AGENT_NAMES) {
+        const p = portfolios[name];
+        if (p?.spyBaseline?.price && p?.spyCurrent?.price) {
+            spyReturn = {
+                baseline: p.spyBaseline.price,
+                current: p.spyCurrent.price,
+                returnPct: Math.round((p.spyCurrent.price - p.spyBaseline.price) / p.spyBaseline.price * 10000) / 100,
+                baselineDate: p.spyBaseline.date,
+            };
+            break;
+        }
+    }
+
     return {
         aggregatePL: Math.round(aggregatePL * 100) / 100,
         aggregateReturnPct,
@@ -298,6 +313,7 @@ function computeSummary(portfolios) {
         totalPositions,
         bestTrade,
         worstTrade,
+        spyReturn,
     };
 }
 
@@ -487,7 +503,17 @@ function handleLeaderboard(res) {
         };
     });
 
-    sendJSON(res, { entries });
+    // Add SPY baseline for comparison
+    let spyReturn = null;
+    for (const name of AGENT_NAMES) {
+        const p = portfolios[name];
+        if (p?.spyBaseline?.price && p?.spyCurrent?.price) {
+            spyReturn = Math.round((p.spyCurrent.price - p.spyBaseline.price) / p.spyBaseline.price * 10000) / 100;
+            break;
+        }
+    }
+
+    sendJSON(res, { entries, spyReturn });
 }
 
 // --- Static file serving ---

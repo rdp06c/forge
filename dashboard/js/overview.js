@@ -46,6 +46,10 @@ function renderSummaryBanner() {
             <span class="stat-label">Worst Trade Today</span>
             <span class="stat-value">${worstHtml}</span>
         </div>
+        ${s.spyReturn ? `<div class="stat">
+            <span class="stat-label">SPY Baseline</span>
+            <span class="stat-value ${s.spyReturn.returnPct >= 0 ? 'positive' : 'negative'}">${s.spyReturn.returnPct >= 0 ? '+' : ''}${s.spyReturn.returnPct}%</span>
+        </div>` : ''}
     </div>`;
 }
 

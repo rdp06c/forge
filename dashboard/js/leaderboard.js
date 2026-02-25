@@ -41,8 +41,9 @@ FORGE.renderLeaderboard = async function() {
             </div>
         </div>`;
 
-        // Store entries for sorting
+        // Store entries and SPY baseline for sorting
         FORGE.state.leaderboardEntries = entries;
+        FORGE.state.leaderboardSpyReturn = data.spyReturn;
         FORGE.sortLeaderboard();
     } catch (e) {
         container.innerHTML = '<div class="agent-error">Failed to load leaderboard</div>';
@@ -89,6 +90,20 @@ FORGE.sortLeaderboard = function() {
         // Draw sparkline after DOM insertion
         requestAnimationFrame(() => drawSparkline(sparkId, entry.sparkline, entry.color));
     });
+
+    // SPY benchmark row
+    const spyRet = FORGE.state.leaderboardSpyReturn;
+    if (spyRet != null) {
+        const spyTr = document.createElement('tr');
+        spyTr.className = 'spy-baseline-row';
+        spyTr.innerHTML = `
+            <td class="leaderboard-rank">--</td>
+            <td style="color:#888;font-weight:600">SPY</td>
+            <td class="sparkline-cell"></td>
+            <td class="${spyRet >= 0 ? 'positive' : 'negative'}">${spyRet >= 0 ? '+' : ''}${spyRet.toFixed(1)}%</td>
+            <td colspan="5" style="color:#888;font-style:italic">Buy & hold baseline</td>`;
+        table.appendChild(spyTr);
+    }
 };
 
 function drawSparkline(canvasId, data, color) {

@@ -701,6 +701,12 @@ body {
     height: 30px;
 }
 
+.spy-baseline-row td {
+    border-top: 1px dashed var(--border);
+    cursor: default !important;
+    background: transparent !important;
+}
+
 .sparkline-cell canvas {
     width: 80px;
     height: 30px;
