@@ -15,6 +15,11 @@ export class EmberAgent extends BaseAgent {
             return false;
         }
 
+        // Hard rule: RSI not overbought (stated in Ember's prompt Factor 2)
+        if (candidateData?.rsi >= 75) {
+            return false;
+        }
+
         // Hard rule: structure must be bullish (structureScore >= 1)
         if (candidateData?.marketStructure?.structureScore < 1) {
             return false;

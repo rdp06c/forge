@@ -4,7 +4,7 @@ import { executeBuy, executeSell, calculatePositionSize, calculatePortfolioValue
 import { callClaude } from '../ai/claude.js';
 import { parseDecisionResponse } from '../ai/parser.js';
 import { buildPhase1Prompt, buildPhase2Prompt } from '../ai/prompts.js';
-import { stockSectors, TOP_CANDIDATES, SECTOR_WILDCARDS, REVERSAL_CANDIDATES, REGIME_DEPLOYMENT } from '../config/constants.js';
+import { stockSectors, TOP_CANDIDATES, SECTOR_WILDCARDS, REVERSAL_CANDIDATES, REGIME_DEPLOYMENT, POSITION_SIZING } from '../config/constants.js';
 import { fetchNewsForStocks } from '../data/polygon.js';
 
 export class BaseAgent {
@@ -44,6 +44,13 @@ export class BaseAgent {
         // Use centralized regime — determined once in forge.js for all agents
         const regime = centralRegime || this.inferRegime(vix);
         portfolio.lastMarketRegime = { regime, timestamp: new Date().toISOString() };
+        if (!portfolio.regimeHistory) portfolio.regimeHistory = [];
+        portfolio.regimeHistory.push({
+            regime,
+            timestamp: new Date().toISOString(),
+            vix: vix?.level ?? null,
+            signals: sharedData.regimeDetail?.signals || [],
+        });
         portfolio.lastSectorRotation = { timestamp: new Date().toISOString(), sectors: sectorRotation };
         if (vix) portfolio.lastVIX = { ...vix, fetchedAt: new Date().toISOString() };
 
@@ -209,15 +216,6 @@ export class BaseAgent {
                         continue;
                     }
 
-                    // Check regime deployment cap
-                    const totalValue = portfolio.cash + Object.entries(portfolio.holdings)
-                        .reduce((sum, [s, sh]) => sum + (enhanced[s]?.price || 0) * sh, 0);
-                    const deployed = totalValue - portfolio.cash;
-                    if (totalValue > 0 && deployed / totalValue >= maxDeployment) {
-                        console.log(`  [${this.name}] Regime cap hit (${(deployed / totalValue * 100).toFixed(0)}% deployed, ${regime} max ${(maxDeployment * 100).toFixed(0)}%) — skipping ${d.symbol}`);
-                        continue;
-                    }
-
                     // Validate against thesis rules
                     if (!this.validateDecision(d, enhanced[d.symbol], enhanced)) {
                         console.log(`  [${this.name}] Thesis rejection: ${d.symbol} (conviction ${d.conviction})`);
@@ -227,12 +225,54 @@ export class BaseAgent {
                     const price = enhanced[d.symbol]?.price || 0;
                     if (price <= 0) continue;
 
+                    // Calculate portfolio value and deployment
+                    const totalValue = portfolio.cash + Object.entries(portfolio.holdings)
+                        .reduce((sum, [s, sh]) => sum + (enhanced[s]?.price || 0) * sh, 0);
+                    const deployed = totalValue - portfolio.cash;
+
+                    // Check regime deployment cap (hard skip if already at max)
+                    if (totalValue > 0 && deployed / totalValue >= maxDeployment) {
+                        console.log(`  [${this.name}] Regime cap hit (${(deployed / totalValue * 100).toFixed(0)}% deployed, ${regime} max ${(maxDeployment * 100).toFixed(0)}%) — skipping ${d.symbol}`);
+                        continue;
+                    }
+
                     // Calculate shares if not provided
                     let shares = d.shares;
                     if (!shares || shares <= 0) {
                         shares = calculatePositionSize(portfolio, d.conviction, regime, price);
                     }
                     if (shares <= 0) continue;
+
+                    // Position sizing clamp — enforce conviction tier range
+                    const sizingTier = POSITION_SIZING[Math.min(d.conviction, 10)] || POSITION_SIZING[6];
+                    const maxPositionShares = Math.floor(totalValue * sizingTier.max / price);
+                    const minPositionShares = Math.floor(totalValue * sizingTier.min / price);
+
+                    if (shares > maxPositionShares) {
+                        console.log(`  [${this.name}] Sizing clamp ↓: ${d.symbol} ${shares}→${maxPositionShares} shares (conv ${d.conviction}, max ${(sizingTier.max * 100)}%)`);
+                        shares = maxPositionShares;
+                    }
+                    if (shares < minPositionShares) {
+                        // Only enforce minimum if it fits within cash and deployment cap
+                        const minCost = minPositionShares * price;
+                        const deployedAfter = (deployed + minCost) / totalValue;
+                        if (minCost <= portfolio.cash && deployedAfter <= maxDeployment) {
+                            console.log(`  [${this.name}] Sizing clamp ↑: ${d.symbol} ${shares}→${minPositionShares} shares (conv ${d.conviction}, min ${(sizingTier.min * 100)}%)`);
+                            shares = minPositionShares;
+                        }
+                    }
+                    if (shares <= 0) continue;
+
+                    // Deployment cap trim — reduce shares if this buy would push over the limit
+                    const buyCost = shares * price;
+                    const deployedAfterBuy = deployed + buyCost;
+                    if (totalValue > 0 && deployedAfterBuy / totalValue > maxDeployment) {
+                        const maxBuyCost = (maxDeployment * totalValue) - deployed;
+                        if (maxBuyCost <= 0) continue;
+                        shares = Math.floor(maxBuyCost / price);
+                        if (shares <= 0) continue;
+                        console.log(`  [${this.name}] Deployment cap trim: ${d.symbol} → ${shares} shares to stay under ${(maxDeployment * 100)}%`);
+                    }
 
                     const success = executeBuy(portfolio, {
                         symbol: d.symbol, shares, price, conviction: d.conviction,
