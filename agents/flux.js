@@ -3,8 +3,43 @@
 import { BaseAgent } from './base-agent.js';
 
 export class FluxAgent extends BaseAgent {
+    /**
+     * Override candidate pool — scan full ~490 stock universe for dip candidates.
+     * The standard composite-scored pool is structurally hostile to dip candidates
+     * (decline penalties push them out of the top 25), so Flux sources its own.
+     */
+    buildCandidatePool(scored, portfolio, enhanced) {
+        const pool = new Set();
+
+        // Always include current holdings
+        for (const sym of Object.keys(portfolio.holdings)) {
+            if (enhanced[sym]) pool.add(sym);
+        }
+
+        // Scan full universe for stocks down 8-25% over 5 days
+        const dipCandidates = [];
+        for (const [sym, data] of Object.entries(enhanced)) {
+            const ret5d = data.momentum?.totalReturn5d ?? 0;
+            if (ret5d <= -8 && ret5d >= -25) {
+                dipCandidates.push({ symbol: sym, ret5d, compositeScore: data.compositeScore ?? 0 });
+            }
+        }
+
+        // Sort by composite score descending (best quality among dips first)
+        dipCandidates.sort((a, b) => b.compositeScore - a.compositeScore);
+
+        for (const dc of dipCandidates.slice(0, 25)) {
+            pool.add(dc.symbol);
+        }
+
+        console.log(`  [Flux] Dip scan: ${dipCandidates.length} stocks down 8-25% in 5d (taking top ${Math.min(dipCandidates.length, 25)})`);
+
+        return pool;
+    }
+
     filterCandidates(candidates, enhanced) {
-        // Only pass candidates with meaningful pullbacks (down 8-25% over 5d)
+        // Pool is already dip-sourced, but re-validate the 5d return
+        // (holdings or edge cases may not meet the criteria)
         const filtered = {};
         for (const [sym, data] of Object.entries(candidates)) {
             const full = enhanced[sym];
