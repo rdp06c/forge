@@ -3,6 +3,20 @@
 import { stockSectors, POSITION_SIZING, REGIME_DEPLOYMENT } from '../config/constants.js';
 
 /**
+ * Add N trading days (weekdays) to a date. Returns a new Date.
+ */
+function addTradingDays(startDate, days) {
+    const d = new Date(startDate);
+    let added = 0;
+    while (added < days) {
+        d.setDate(d.getDate() + 1);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) added++;
+    }
+    return d;
+}
+
+/**
  * Count weekdays (trading days) between two dates, excluding the start date.
  */
 function countTradingDays(startDate, endDate) {
@@ -22,15 +36,15 @@ function countTradingDays(startDate, endDate) {
 /**
  * Calculate position size based on conviction and regime
  */
-export function calculatePositionSize(portfolio, conviction, regime, currentPrice) {
+export function calculatePositionSize(portfolio, conviction, regime, currentPrice, marketPrices) {
     if (conviction < 6) return 0;
 
     const sizingTier = POSITION_SIZING[Math.min(conviction, 10)] || POSITION_SIZING[6];
     const regimeDeployment = REGIME_DEPLOYMENT[regime] || REGIME_DEPLOYMENT.choppy;
 
-    // Total portfolio value (approximate with cash + holdings at cost)
+    // Total portfolio value using actual per-stock prices
     const totalValue = portfolio.cash + Object.entries(portfolio.holdings)
-        .reduce((sum, [, shares]) => sum + shares * currentPrice, 0); // rough estimate
+        .reduce((sum, [s, shares]) => sum + shares * (marketPrices?.[s]?.price || currentPrice), 0);
 
     // Target allocation: midpoint of conviction range × midpoint of regime deployment
     const convictionMid = (sizingTier.min + sizingTier.max) / 2;
@@ -254,11 +268,11 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
         const plSign = profitLoss >= 0 ? '+' : '';
         console.log(`  [${agentName}] SELL ${shares} ${symbol} @ $${price.toFixed(2)} (${plSign}$${profitLoss.toFixed(2)}, ${plSign}${returnPercent.toFixed(1)}%)`);
 
-        // Rebuy cooldown: block re-entry for 5 days
+        // Rebuy cooldown: block re-entry for 5 trading days (weekdays)
         portfolio.blockedTrades = portfolio.blockedTrades || [];
         portfolio.blockedTrades.push({
             symbol,
-            blockedUntil: new Date(Date.now() + 5 * 86400000).toISOString(),
+            blockedUntil: addTradingDays(new Date(), 5).toISOString(),
             reason: 'rebuy_cooldown',
         });
     }

@@ -17,17 +17,25 @@ function getClient() {
  * @returns {string} The text response from Claude
  */
 export async function callClaude(prompt, options = {}) {
-    const response = await getClient().messages.create({
-        model: options.model || 'claude-sonnet-4-6',
-        max_tokens: options.maxTokens || 8000,
-        messages: [{ role: 'user', content: prompt }],
-    });
+    const timeoutMs = options.timeout || 120000; // 2 minutes default
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
 
-    // Extract text from content blocks
-    let text = '';
-    for (const block of response.content) {
-        if (block.type === 'text') text += block.text;
+    try {
+        const response = await getClient().messages.create({
+            model: options.model || 'claude-sonnet-4-6',
+            max_tokens: options.maxTokens || 8000,
+            messages: [{ role: 'user', content: prompt }],
+        }, { signal: controller.signal });
+
+        // Extract text from content blocks
+        let text = '';
+        for (const block of response.content) {
+            if (block.type === 'text') text += block.text;
+        }
+
+        return text;
+    } finally {
+        clearTimeout(timer);
     }
-
-    return text;
 }

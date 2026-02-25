@@ -260,7 +260,7 @@ export class BaseAgent {
                     // Calculate shares if not provided
                     let shares = d.shares;
                     if (!shares || shares <= 0) {
-                        shares = calculatePositionSize(portfolio, d.conviction, regime, price);
+                        shares = calculatePositionSize(portfolio, d.conviction, regime, price, enhanced);
                     }
                     if (shares <= 0) continue;
 
@@ -302,9 +302,17 @@ export class BaseAgent {
                     if (success) {
                         boughtThisCycle.add(d.symbol);
                         // Store Strike's mechanical exit targets in holdingTheses
-                        if (d.expectedTarget && d.mechanicalExit && portfolio.holdingTheses?.[d.symbol]) {
-                            portfolio.holdingTheses[d.symbol].expectedTarget = d.expectedTarget;
-                            portfolio.holdingTheses[d.symbol].mechanicalExit = d.mechanicalExit;
+                        const thesis = portfolio.holdingTheses?.[d.symbol];
+                        if (thesis) {
+                            const target = this.extractTargetPrice(d, price);
+                            if (target) {
+                                thesis.expectedTarget = target;
+                                // Compute mechanicalExit in code — never trust Claude for math
+                                thesis.mechanicalExit = Math.round((price + (target - price) * 0.55) * 100) / 100;
+                                console.log(`  [${this.name}] Exit targets: ${d.symbol} entry $${price.toFixed(2)} → target $${target.toFixed(2)} → mechanical exit $${thesis.mechanicalExit.toFixed(2)}`);
+                            } else if (this.name === 'Strike') {
+                                console.warn(`  [${this.name}] WARNING: No target price found for ${d.symbol} — mechanical exit will not function`);
+                            }
                         }
                     }
                 }
@@ -339,6 +347,36 @@ export class BaseAgent {
         if (vix.level > 30) return 'bear';
         if (vix.level > 25) return 'choppy';
         return 'bull';
+    }
+
+    /**
+     * Extract target price from a buy decision.
+     * Tries JSON field first, then parses from reasoning text.
+     * Returns the target price or null if not found.
+     */
+    extractTargetPrice(decision, entryPrice) {
+        // 1. JSON field (if Claude actually returned it)
+        if (decision.expectedTarget && decision.expectedTarget > entryPrice) {
+            return decision.expectedTarget;
+        }
+
+        if (!decision.reasoning) return null;
+
+        // 2. "targeting $XXX" or "target $XXX" (direct dollar amount after target keyword)
+        const m1 = decision.reasoning.match(/[Tt]arget(?:ing)?[:\s]+\$?([\d.]+)/);
+        if (m1) {
+            const v = parseFloat(m1[1]);
+            if (v > entryPrice) return v;
+        }
+
+        // 3. "target ... $XXX" (dollar amount later in the same sentence, e.g. "Target: ~10% move to ~$266")
+        const m2 = decision.reasoning.match(/[Tt]arget(?:ing)?[^.]*?\$([\d.]+)/);
+        if (m2) {
+            const v = parseFloat(m2[1]);
+            if (v > entryPrice) return v;
+        }
+
+        return null;
     }
 
     // ─── Override points for subclasses ───

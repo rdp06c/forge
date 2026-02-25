@@ -36,13 +36,34 @@ for (const dir of ['portfolios', 'cache', 'logs']) {
     if (!existsSync(fullPath)) mkdirSync(fullPath, { recursive: true });
 }
 
+// NYSE full-day closures for 2026 (MM-DD format, ET timezone)
+const MARKET_HOLIDAYS_2026 = new Set([
+    '01-01', // New Year's Day
+    '01-19', // MLK Day
+    '02-16', // Presidents' Day
+    '04-03', // Good Friday
+    '05-25', // Memorial Day
+    '06-19', // Juneteenth
+    '07-03', // Independence Day (observed — July 4 is Saturday)
+    '09-07', // Labor Day
+    '11-26', // Thanksgiving
+    '12-25', // Christmas
+]);
+
 /**
  * Check if today is a US trading day (weekday, not a known market holiday)
  */
 function isTradingDay() {
     const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/New_York' }));
     const day = now.getDay();
-    return day >= 1 && day <= 5;
+    if (day === 0 || day === 6) return false;
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    if (MARKET_HOLIDAYS_2026.has(`${mm}-${dd}`)) {
+        console.log(`Skipping — market holiday (${mm}-${dd})`);
+        return false;
+    }
+    return true;
 }
 
 /**
