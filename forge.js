@@ -12,7 +12,7 @@ import { AGENTS, AGENT_NAMES } from './config/agents.js';
 import { fetchAllMarketData } from './data/polygon.js';
 import { enrichMarketData, detectSectorRotation } from './data/technicals.js';
 import { fetchNewsForStocks } from './data/polygon.js';
-import { loadPortfolio } from './portfolio/schema.js';
+import { loadPortfolio, savePortfolio } from './portfolio/schema.js';
 import { uploadPortfolio, uploadCycleLog } from './drive/google-drive.js';
 
 import { EmberAgent } from './agents/ember.js';
@@ -175,6 +175,12 @@ async function runForgeCycle() {
         return;
     }
 
+    // Track SPY as performance baseline for all agents
+    const spyPrice = sharedData.enhanced['SPY']?.price || sharedData.marketData['SPY']?.price || null;
+    if (spyPrice) {
+        console.log(`SPY baseline: $${spyPrice.toFixed(2)}`);
+    }
+
     // 2. Run each agent sequentially (rate limit respect)
     const results = [];
     for (const name of AGENT_NAMES) {
@@ -194,11 +200,17 @@ async function runForgeCycle() {
         }
     }
 
-    // 3. Upload to Google Drive
+    // 3. Update SPY baseline + upload to Google Drive
     console.log('\nUploading to Google Drive...');
     for (const name of AGENT_NAMES) {
         try {
             const portfolio = loadPortfolio(name);
+            // Set SPY baseline on first run, update current every run
+            if (spyPrice) {
+                if (!portfolio.spyBaseline) portfolio.spyBaseline = { price: spyPrice, date: new Date().toISOString() };
+                portfolio.spyCurrent = { price: spyPrice, date: new Date().toISOString() };
+                savePortfolio(name, portfolio);
+            }
             await uploadPortfolio(name, portfolio);
         } catch (err) {
             console.warn(`  Drive upload failed for ${name}:`, err.message);
@@ -226,7 +238,16 @@ async function runForgeCycle() {
             console.log(`  ${r.agentName}: ERROR — ${r.error}`);
         } else {
             const cash = r.cash != null ? ` | Cash: $${r.cash.toFixed(2)}` : '';
-            console.log(`  ${r.agentName}: $${r.portfolioValue?.toFixed(2) || '?'}${cash}`);
+            const ret = r.portfolioValue ? ((r.portfolioValue - 50000) / 50000 * 100).toFixed(1) : '?';
+            console.log(`  ${r.agentName}: $${r.portfolioValue?.toFixed(2) || '?'}${cash} (${ret}%)`);
+        }
+    }
+    // SPY baseline comparison
+    if (spyPrice) {
+        const firstPortfolio = loadPortfolio(AGENT_NAMES[0]);
+        if (firstPortfolio.spyBaseline?.price) {
+            const spyReturn = ((spyPrice - firstPortfolio.spyBaseline.price) / firstPortfolio.spyBaseline.price * 100).toFixed(1);
+            console.log(`  SPY:   $${firstPortfolio.spyBaseline.price.toFixed(2)} → $${spyPrice.toFixed(2)} (${spyReturn}%)`);
         }
     }
 }
