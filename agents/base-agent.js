@@ -53,12 +53,12 @@ export class BaseAgent {
                     thesisQualified: true,
                     thesisAdherenceNotes: fs.reasoning,
                     decisionFrameworkUsed: this.config.exitFramework || 'mechanical_exit',
-                    regimeAtEntry: portfolio.lastMarketRegime?.regime || centralRegime,
+                    regimeAtEntry: portfolio.holdingTheses?.[fs.symbol]?.entryRegime || portfolio.lastMarketRegime?.regime || centralRegime,
                 },
             });
-            if (success && phase1Results) {
-                phase1Results.sells = phase1Results.sells || [];
-                phase1Results.sells.push({ symbol: fs.symbol });
+            if (success) {
+                if (!phase1Results) phase1Results = { sells: [], regime: centralRegime, summary: '' };
+                phase1Results.sells.push({ symbol: fs.symbol, shares: fs.shares, reasoning: fs.reasoning });
             }
         }
 
@@ -192,7 +192,7 @@ export class BaseAgent {
                                 thesisQualified: true,
                                 thesisAdherenceNotes: `Phase 1 sell decision by ${this.name}`,
                                 decisionFrameworkUsed: this.config.exitFramework,
-                                regimeAtEntry: portfolio.lastMarketRegime?.regime || regime,
+                                regimeAtEntry: portfolio.holdingTheses?.[d.symbol]?.entryRegime || portfolio.lastMarketRegime?.regime || regime,
                             }
                         });
                         if (success) sells.push(d);

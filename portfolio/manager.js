@@ -3,6 +3,23 @@
 import { stockSectors, POSITION_SIZING, REGIME_DEPLOYMENT } from '../config/constants.js';
 
 /**
+ * Count weekdays (trading days) between two dates, excluding the start date.
+ */
+function countTradingDays(startDate, endDate) {
+    let count = 0;
+    const d = new Date(startDate);
+    d.setHours(0, 0, 0, 0);
+    const end = new Date(endDate);
+    end.setHours(0, 0, 0, 0);
+    while (d < end) {
+        d.setDate(d.getDate() + 1);
+        const dow = d.getDay();
+        if (dow !== 0 && dow !== 6) count++;
+    }
+    return count;
+}
+
+/**
  * Calculate position size based on conviction and regime
  */
 export function calculatePositionSize(portfolio, conviction, regime, currentPrice) {
@@ -110,6 +127,7 @@ export function executeBuy(portfolio, { symbol, shares, price, conviction, reaso
             entryConviction: conviction,
             entryPrice: price,
             entryDate: new Date().toISOString(),
+            entryRegime: portfolio.lastMarketRegime?.regime || null,
             entryMomentum: marketData[symbol]?.momentum?.score || null,
             entryRS: marketData[symbol]?.relativeStrength?.rsScore || null,
             entrySectorFlow: marketData[symbol]?.sectorRotation?.moneyFlow || null,
@@ -165,9 +183,8 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
             return false;
         }
 
-        // Hold discipline: < 3 days — only sell if stop-loss triggered (-15% or worse)
-        const holdMs = Date.now() - new Date(buys[0].timestamp).getTime();
-        const holdDays = Math.floor(holdMs / 86400000);
+        // Hold discipline: < 3 trading days — only sell if stop-loss triggered (-15% or worse)
+        const holdDays = countTradingDays(new Date(buys[0].timestamp), new Date());
         if (holdDays < 3) {
             const totalBuyCost = buys.reduce((s, t) => s + t.cost, 0);
             const totalBuyShares = buys.reduce((s, t) => s + t.shares, 0);

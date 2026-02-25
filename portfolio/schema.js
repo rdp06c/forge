@@ -44,7 +44,15 @@ export function loadPortfolio(agentName) {
         savePortfolio(agentName, portfolio);
         return portfolio;
     }
-    return JSON.parse(readFileSync(filePath, 'utf8'));
+    const portfolio = JSON.parse(readFileSync(filePath, 'utf8'));
+
+    // Clean expired blockedTrades
+    if (portfolio.blockedTrades?.length > 0) {
+        const now = new Date();
+        portfolio.blockedTrades = portfolio.blockedTrades.filter(b => new Date(b.blockedUntil) > now);
+    }
+
+    return portfolio;
 }
 
 export function savePortfolio(agentName, portfolio) {
