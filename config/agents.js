@@ -16,6 +16,7 @@ export const AGENTS = {
             fundamentalsNote: 'Noted but do not gate the trade',
             willSitFlat: true,
             noExceptions: true,
+            maxHoldings: 3,
         },
         entryFramework: 'custom', // Does NOT use APEX 5-step chain
         exitFramework: 'apex',    // Uses APEX standard sell triggers

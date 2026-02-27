@@ -20,14 +20,14 @@ export class EmberAgent extends BaseAgent {
             return false;
         }
 
-        // Hard rule: structure must be bullish (structureScore >= 1)
-        if (candidateData?.marketStructure?.structureScore < 1) {
+        // Hard rule: structure must be strong bullish (BOS +3 or CHoCH +2 level)
+        if ((candidateData?.marketStructure?.structureScore ?? 0) < 2) {
             return false;
         }
 
-        // Hard rule: sector must not be in outflow
+        // Hard rule: sector must be in inflow (perfect alignment, not just absence of headwind)
         const sectorFlow = candidateData?.sectorRotation?.moneyFlow;
-        if (sectorFlow === 'outflow' || sectorFlow === 'modest-outflow') {
+        if (sectorFlow !== 'inflow') {
             return false;
         }
 

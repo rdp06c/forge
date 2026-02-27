@@ -141,7 +141,7 @@ FACTOR 2: TECHNICAL STRUCTURE (must be perfect alignment)
 - Momentum building, not fading
 
 FACTOR 3: SECTOR CONTEXT (must be favorable)
-- Sector in inflow or at minimum neutral
+- Sector must be in INFLOW — neutral is not sufficient for perfect alignment
 - No sector headwinds
 
 ALL THREE must align perfectly = conviction 10/10. You trade.
@@ -308,7 +308,8 @@ ${JSON.stringify(filteredData, null, 1)}
 
 THESIS DISCIPLINE: Every decision must be justifiable under your thesis rules. If no candidates meet your criteria, respond with an empty decisions array. Sitting flat is correct behavior for ${agentName}.
 IMPORTANT: Each symbol may appear AT MOST ONCE in your decisions. Do not recommend the same stock twice.
+PRIORITY: Order BUY decisions by conviction (highest first). Top pick first.
 
 JSON ONLY response:
-{ "decisions": [{ "action": "BUY", "symbol": "X", "shares": N, "conviction": 1-10, "reasoning": "..."${agentName === 'Strike' ? ', "expectedTarget": N, "mechanicalExit": N' : ''} }], "thesis_adherence": "summary of how decisions align with ${agentName}'s thesis" }`;
+{ "decisions": [{ "action": "BUY", "symbol": "X", "shares": N, "conviction": 1-10, "reasoning": "...", "expectedTarget": N${agentName === 'Strike' ? ', "mechanicalExit": N' : ''} }], "thesis_adherence": "summary of how decisions align with ${agentName}'s thesis" }`;
 }

@@ -9,6 +9,13 @@ export class StrikeAgent extends BaseAgent {
             return false;
         }
 
+        // APEX Red Flag gate: RS < 30 AND momentum < 3 = skip
+        const rs = candidateData?.relativeStrength?.rsScore ?? 50;
+        const momentum = candidateData?.momentum?.score ?? 5;
+        if (rs < 30 && momentum < 3) {
+            return false;
+        }
+
         return true;
     }
 

@@ -20,6 +20,11 @@ export class AlloyAgent extends BaseAgent {
     validateDecision(decision, candidateData) {
         if (decision.conviction < 7) return false;
 
+        // APEX Red Flag gate: RS < 30 AND momentum < 3 = skip
+        const rs = candidateData?.relativeStrength?.rsScore ?? 50;
+        const momentum = candidateData?.momentum?.score ?? 5;
+        if (rs < 30 && momentum < 3) return false;
+
         // Hard rule: must have Bullish BOS
         if (!candidateData?.marketStructure?.bos || candidateData?.marketStructure?.bosType !== 'bullish') {
             return false;

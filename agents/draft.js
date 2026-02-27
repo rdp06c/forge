@@ -6,6 +6,11 @@ export class DraftAgent extends BaseAgent {
     validateDecision(decision, candidateData) {
         if (decision.conviction < 7) return false;
 
+        // APEX Red Flag gate: RS < 30 AND momentum < 3 = skip
+        const rs = candidateData?.relativeStrength?.rsScore ?? 50;
+        const momentumScore = candidateData?.momentum?.score ?? 5;
+        if (rs < 30 && momentumScore < 3) return false;
+
         // Hard volume gate
         const volumeTrend = candidateData?.momentum?.volumeTrend ?? 1;
         const structureScore = candidateData?.marketStructure?.structureScore ?? 0;

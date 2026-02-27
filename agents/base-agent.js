@@ -237,6 +237,13 @@ export class BaseAgent {
                         continue;
                     }
 
+                    // Max holdings check
+                    const maxHoldings = this.config.rules?.maxHoldings;
+                    if (maxHoldings && Object.keys(portfolio.holdings).length >= maxHoldings) {
+                        console.log(`  [${this.name}] Buy limit reached (${maxHoldings} holdings) — skipping ${d.symbol}`);
+                        continue;
+                    }
+
                     // Validate against thesis rules
                     if (!this.validateDecision(d, enhanced[d.symbol], enhanced)) {
                         console.log(`  [${this.name}] Thesis rejection: ${d.symbol} (conviction ${d.conviction})`);
@@ -280,6 +287,9 @@ export class BaseAgent {
                         if (minCost <= portfolio.cash && deployedAfter <= maxDeployment) {
                             console.log(`  [${this.name}] Sizing clamp ↑: ${d.symbol} ${shares}→${minPositionShares} shares (conv ${d.conviction}, min ${(sizingTier.min * 100)}%)`);
                             shares = minPositionShares;
+                        } else {
+                            console.log(`  [${this.name}] Below conviction minimum: ${d.symbol} — skipping`);
+                            continue;
                         }
                     }
                     if (shares <= 0) continue;
@@ -293,6 +303,20 @@ export class BaseAgent {
                         shares = Math.floor(maxBuyCost / price);
                         if (shares <= 0) continue;
                         console.log(`  [${this.name}] Deployment cap trim: ${d.symbol} → ${shares} shares to stay under ${(maxDeployment * 100)}%`);
+
+                        // Re-check against conviction minimum after trim
+                        const positionPct = (shares * price) / totalValue;
+                        if (positionPct < sizingTier.min) {
+                            console.log(`  [${this.name}] Cap trim below minimum: ${d.symbol} (${(positionPct*100).toFixed(1)}% < ${(sizingTier.min*100)}%) — skipping`);
+                            continue;
+                        }
+                    }
+
+                    // Strike hard gate: must have extractable target price BEFORE buying
+                    const target = this.extractTargetPrice(d, price);
+                    if (this.name === 'Strike' && !target) {
+                        console.log(`  [${this.name}] No target price found for ${d.symbol} — rejecting (mechanical exit requires target)`);
+                        continue;
                     }
 
                     const success = executeBuy(portfolio, {
@@ -301,18 +325,13 @@ export class BaseAgent {
                     });
                     if (success) {
                         boughtThisCycle.add(d.symbol);
-                        // Store Strike's mechanical exit targets in holdingTheses
+                        // Store exit targets in holdingTheses
                         const thesis = portfolio.holdingTheses?.[d.symbol];
-                        if (thesis) {
-                            const target = this.extractTargetPrice(d, price);
-                            if (target) {
-                                thesis.expectedTarget = target;
-                                // Compute mechanicalExit in code — never trust Claude for math
-                                thesis.mechanicalExit = Math.round((price + (target - price) * 0.55) * 100) / 100;
-                                console.log(`  [${this.name}] Exit targets: ${d.symbol} entry $${price.toFixed(2)} → target $${target.toFixed(2)} → mechanical exit $${thesis.mechanicalExit.toFixed(2)}`);
-                            } else if (this.name === 'Strike') {
-                                console.warn(`  [${this.name}] WARNING: No target price found for ${d.symbol} — mechanical exit will not function`);
-                            }
+                        if (thesis && target) {
+                            thesis.expectedTarget = target;
+                            // Compute mechanicalExit in code — never trust Claude for math
+                            thesis.mechanicalExit = Math.round((price + (target - price) * 0.55) * 100) / 100;
+                            console.log(`  [${this.name}] Exit targets: ${d.symbol} entry $${price.toFixed(2)} → target $${target.toFixed(2)} → mechanical exit $${thesis.mechanicalExit.toFixed(2)}`);
                         }
                     }
                 }

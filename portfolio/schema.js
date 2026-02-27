@@ -27,8 +27,8 @@ export function createNewPortfolio(agentName) {
         portfolioHealth: null,
         // FORGE-specific
         agent: agentName,
-        cycleId: 'FORGE_Cycle_1',
-        cycleStartDate: '2026-02-23',
+        cycleId: 'FORGE_Cycle_2',
+        cycleStartDate: '2026-02-27',
         forgeVersion: '1.0.0',
     };
 }
