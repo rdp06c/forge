@@ -306,6 +306,15 @@ ${JSON.stringify(sectorSummary, null, 1)}
 CANDIDATES (pre-screened, ranked by composite score):
 ${JSON.stringify(filteredData, null, 1)}
 
+CONVICTION CALIBRATION — Be brutally honest. Inflated scores corrupt the research data.
+10/10: Generational setup. Every factor perfect, no caveats. Maybe 1 per quarter across 490 stocks.
+9/10: Exceptional. One clearly identified minor imperfection. 1-2 per month.
+8/10: Strong. Clear catalyst with solid confirmation. 1-2 per week.
+7/10: Meets all minimum criteria. Most valid trades land here.
+6 or below: Does NOT qualify. PASS.
+
+REALITY CHECK: On a typical day, 0-2 candidates genuinely qualify for any single agent. If you are recommending 3+ BUYs, pause and re-examine your conviction scores. An empty decisions array is the expected outcome most days.
+
 THESIS DISCIPLINE: Every decision must be justifiable under your thesis rules. If no candidates meet your criteria, respond with an empty decisions array. Sitting flat is correct behavior for ${agentName}.
 IMPORTANT: Each symbol may appear AT MOST ONCE in your decisions. Do not recommend the same stock twice.
 PRIORITY: Order BUY decisions by conviction (highest first). Top pick first.

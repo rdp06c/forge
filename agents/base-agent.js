@@ -314,9 +314,16 @@ export class BaseAgent {
 
                     // Strike hard gate: must have extractable target price BEFORE buying
                     const target = this.extractTargetPrice(d, price);
-                    if (this.name === 'Strike' && !target) {
-                        console.log(`  [${this.name}] No target price found for ${d.symbol} — rejecting (mechanical exit requires target)`);
-                        continue;
+                    if (this.name === 'Strike') {
+                        if (!target) {
+                            console.log(`  [${this.name}] No target price found for ${d.symbol} — rejecting (mechanical exit requires target)`);
+                            continue;
+                        }
+                        const movePercent = ((target - price) / price) * 100;
+                        if (movePercent < 5) {
+                            console.log(`  [${this.name}] Target too tight: ${d.symbol} (${movePercent.toFixed(1)}% move, need 5%+) — rejecting`);
+                            continue;
+                        }
                     }
 
                     const success = executeBuy(portfolio, {
