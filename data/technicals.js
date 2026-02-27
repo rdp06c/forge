@@ -307,7 +307,13 @@ export function detectSectorRotation(marketData, multiDayCache) {
 }
 
 // Composite Score — used for candidate ranking
+// Synced with APEX's rebalanced scoring (Feb 26, 2026): reduced momentum dominance,
+// stronger structure/pullback signals, RS mean-reversion penalty, conditional decline penalty
 export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlow, structureScore, isAccelerating, upDays, totalDays, todayChange, totalReturn5d, rsi, macdCrossover, daysToCover, volumeTrend, fvg }) {
+    // [1] Scale momentum + RS by 0.6 to reduce base dominance (0-12 instead of 0-20)
+    const momentumContrib = momentumScore * 0.6;
+    const rsContrib = rsNormalized * 0.6;
+
     let sectorBonus = 0;
     if (sectorFlow === 'inflow') sectorBonus = 2;
     else if (sectorFlow === 'modest-inflow') sectorBonus = 1;
@@ -315,11 +321,16 @@ export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlo
 
     const accelBonus = isAccelerating && momentumScore >= 6 ? 1.5 : 0;
     const consistencyBonus = (upDays >= 3 && totalDays >= 4) ? 1.0 : 0;
-    const structureBonus = (structureScore || 0) * 0.75;
+    // [6] Increase structure weight: *1.25 (max ±3.75, was ±2.25)
+    const structureBonus = (structureScore || 0) * 1.25;
 
     const chg = todayChange || 0;
-    const runnerPenalty = chg >= 15 ? -4 : chg >= 10 ? -3 : chg >= 7 ? -2 : chg >= 5 ? -1 : 0;
-    const declinePenalty = chg <= -5 ? -3 : chg <= -3 ? -2 : chg <= -2 ? -1 : 0;
+    // [7] Scale runner penalty proportionally with 0.6 base reduction
+    const runnerPenalty = chg >= 15 ? -3 : chg >= 10 ? -2 : chg >= 7 ? -1 : chg >= 5 ? -0.5 : 0;
+    // [4] Conditional decline penalty: no penalty for bullish structure dips
+    const declinePenalty = (structureScore ?? 0) >= 1
+        ? (chg <= -8 ? -1 : 0)
+        : (chg <= -5 ? -3 : chg <= -3 ? -2 : chg <= -2 ? -1 : 0);
 
     const extensionPenalty = (momentumScore >= 9 && rsNormalized >= 8.5) ? -5
         : (momentumScore >= 9 || rsNormalized >= 8.5) ? -3.5
@@ -328,14 +339,24 @@ export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlo
         : 0;
 
     const ret5d = totalReturn5d ?? 0;
-    const pullbackBonus = (ret5d >= -8 && ret5d <= -2 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow' && sectorFlow !== 'modest-outflow') ? 2
+    // [3] Bigger, more tiered pullback bonus (max +5, was +2)
+    const pullbackBonus =
+        (ret5d >= -8 && ret5d <= -2 && (structureScore ?? 0) >= 2 && sectorFlow !== 'outflow') ? 5
+        : (ret5d >= -8 && ret5d <= -2 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow' && sectorFlow !== 'modest-outflow') ? 4
+        : (ret5d >= -5 && ret5d < 0 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow') ? 3
+        : (ret5d >= -8 && ret5d <= -2 && (structureScore ?? 0) >= 0) ? 2
         : (ret5d >= -5 && ret5d < 0 && (structureScore ?? 0) >= 0 && sectorFlow !== 'outflow') ? 1
         : 0;
 
+    // [5] Steeper RSI penalties, broader oversold bonuses
     const rsiBonusPenalty = rsi != null
-        ? (rsi < 30 ? 1.5 : rsi > 85 ? -4 : rsi > 75 ? -3 : rsi > 70 ? -2 : 0)
+        ? (rsi < 30 ? 2.5 : rsi < 40 ? 1.5 : rsi < 50 ? 0.5
+            : rsi > 80 ? -5 : rsi > 70 ? -3 : 0)
         : 0;
     const macdBonus = macdCrossover === 'bullish' ? 2.5 : macdCrossover === 'bearish' ? -2.0 : -0.5;
+
+    // [2] RS mean-reversion penalty: RS=100 has 11.1% win rate in APEX data
+    const rsMeanRevPenalty = rsNormalized >= 9.5 ? -3 : rsNormalized >= 9 ? -2 : rsNormalized >= 8.5 ? -1 : 0;
 
     const dtc = daysToCover || 0;
     const squeezeBonus = (dtc > 5 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow') ? 1.5
@@ -349,9 +370,9 @@ export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlo
         : (fvg === 'bearish' && (structureScore ?? 0) < 0) ? -0.5
         : 0;
 
-    return momentumScore + rsNormalized + sectorBonus + accelBonus + consistencyBonus
+    return momentumContrib + rsContrib + sectorBonus + accelBonus + consistencyBonus
         + structureBonus + extensionPenalty + pullbackBonus + runnerPenalty + declinePenalty
-        + rsiBonusPenalty + macdBonus + squeezeBonus + volumeBonus + fvgBonus;
+        + rsiBonusPenalty + macdBonus + rsMeanRevPenalty + squeezeBonus + volumeBonus + fvgBonus;
 }
 
 // ═══════════════════════════════════════════════════
