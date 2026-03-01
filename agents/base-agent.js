@@ -274,7 +274,7 @@ export class BaseAgent {
                     // Position sizing clamp — enforce conviction tier range
                     const sizingTier = POSITION_SIZING[Math.min(d.conviction, 10)] || POSITION_SIZING[6];
                     const maxPositionShares = Math.floor(totalValue * sizingTier.max / price);
-                    const minPositionShares = Math.floor(totalValue * sizingTier.min / price);
+                    const minPositionShares = Math.ceil(totalValue * sizingTier.min / price);
 
                     if (shares > maxPositionShares) {
                         console.log(`  [${this.name}] Sizing clamp ↓: ${d.symbol} ${shares}→${maxPositionShares} shares (conv ${d.conviction}, max ${(sizingTier.max * 100)}%)`);
