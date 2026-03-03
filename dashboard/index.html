@@ -3,103 +3,40 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FORGE Dashboard</title>
+    <title>FORGE Backtester</title>
     <link rel="stylesheet" href="/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.1.0/dist/chartjs-plugin-annotation.min.js"></script>
 </head>
 <body>
 
 <div class="header">
-    <h1>FORGE</h1>
-    <span id="cycle-id" class="badge badge-gray">--</span>
-    <span id="regime-badge" class="badge badge-gray">--</span>
-    <div class="header-meta">
-        <span>VIX: <strong id="vix-level">--</strong></span>
-        <span>Updated: <strong id="last-updated">--</strong></span>
-        <span id="stale-warning" class="stale-warning" style="display:none">DATA MAY BE STALE</span>
-    </div>
+    <h1>FORGE Backtester</h1>
+    <span class="header-sub">Deterministic Strategy Simulation for APEX</span>
 </div>
 
 <nav class="nav">
-    <button class="active" data-view="overview">Daily Overview</button>
-    <button data-view="charts">Charts</button>
-    <button data-view="compare">Compare</button>
-    <button data-view="heatmap">Sector Heatmap</button>
-    <button data-view="leaderboard">Leaderboard</button>
-    <button data-view="detail" id="detail-tab" style="display:none">Agent Detail</button>
+    <button class="active" data-view="overview">Results</button>
+    <button data-view="detail" id="detail-tab" style="display:none">Strategy Detail</button>
+    <button data-view="comparison">Comparison</button>
 </nav>
 
-<!-- View 1: Daily Overview -->
+<!-- View 1: Results Overview -->
 <div id="view-overview" class="view active">
-    <div id="summary-banner"></div>
-    <div class="agent-grid" id="agent-grid"></div>
+    <div id="results-list"></div>
 </div>
 
-<!-- View 2: Charts -->
-<div id="view-charts" class="view">
-    <div class="charts-container">
-        <div class="chart-box">
-            <h3>Portfolio Value Over Time</h3>
-            <div id="value-chart-empty" class="chart-empty" style="display:none">Data accumulates daily — charts appear after 3+ data points</div>
-            <canvas id="value-chart"></canvas>
-        </div>
-        <div class="chart-box">
-            <h3>Win Rate Over Time</h3>
-            <div id="winrate-chart-empty" class="chart-empty" style="display:none">Win rate data appears as trades close</div>
-            <canvas id="winrate-chart"></canvas>
-        </div>
-        <div class="chart-box">
-            <h3>Thesis Adherence Over Time</h3>
-            <div id="adherence-chart-empty" class="chart-empty" style="display:none">Adherence data appears as trades close</div>
-            <canvas id="adherence-chart"></canvas>
-        </div>
-        <div class="chart-box">
-            <h3>Trade Duration Distribution</h3>
-            <div id="duration-chart-empty" class="chart-empty" style="display:none">Duration data appears as trades close</div>
-            <canvas id="duration-chart"></canvas>
-        </div>
-    </div>
-</div>
-
-<!-- View 3: Agent Detail -->
+<!-- View 2: Strategy Detail -->
 <div id="view-detail" class="view">
-    <button class="detail-back" onclick="FORGE.showView('overview')">&larr; Back to Overview</button>
+    <button class="back-btn" onclick="showView('overview')">&larr; Back</button>
     <div id="detail-content"></div>
 </div>
 
-<!-- View 4: Compare -->
-<div id="view-compare" class="view">
-    <div id="compare-content"></div>
+<!-- View 3: Comparison -->
+<div id="view-comparison" class="view">
+    <div id="comparison-content"></div>
 </div>
 
-<!-- View 5: Sector Heatmap -->
-<div id="view-heatmap" class="view">
-    <div id="heatmap-content"></div>
-</div>
-
-<!-- View 6: Leaderboard -->
-<div id="view-leaderboard" class="view">
-    <div id="leaderboard-content"></div>
-</div>
-
-<!-- Trade Detail Modal -->
-<div id="trade-modal" class="modal-overlay" style="display:none" onclick="if(event.target===this)FORGE.closeTradeModal()">
-    <div class="modal-content">
-        <button class="modal-close" onclick="FORGE.closeTradeModal()">&times;</button>
-        <div id="trade-modal-body"></div>
-    </div>
-</div>
-
-<!-- Scripts loaded in order — shared FORGE namespace -->
 <script src="/js/app.js"></script>
-<script src="/js/modal.js"></script>
-<script src="/js/overview.js"></script>
-<script src="/js/charts.js"></script>
-<script src="/js/detail.js"></script>
-<script src="/js/compare.js"></script>
-<script src="/js/heatmap.js"></script>
-<script src="/js/leaderboard.js"></script>
 
 </body>
 </html>

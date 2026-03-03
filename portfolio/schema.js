@@ -1,47 +1,38 @@
-// Portfolio JSON creation/validation — FORGE-extended schema
+// Portfolio JSON creation/validation
 import { STARTING_BALANCE } from '../config/constants.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const PORTFOLIOS_DIR = join(import.meta.dirname, '..', 'portfolios');
 
-export function createNewPortfolio(agentName) {
+export function createBacktestPortfolio(initialBalance, strategyName) {
     return {
-        cash: STARTING_BALANCE,
-        initialBalance: STARTING_BALANCE,
+        cash: initialBalance || STARTING_BALANCE,
+        initialBalance: initialBalance || STARTING_BALANCE,
         holdings: {},
         transactions: [],
         performanceHistory: [],
         closedTrades: [],
         holdingTheses: {},
         lastMarketRegime: null,
-        lastCandidateScores: null,
-        lastSectorRotation: null,
         blockedTrades: [],
-        tradingRules: {},
-        holdSnapshots: [],
         regimeHistory: [],
         lastVIX: null,
         spyBaseline: null,
         spyCurrent: null,
-        portfolioHealth: null,
-        // FORGE-specific
-        agent: agentName,
-        cycleId: 'FORGE_Cycle_2',
-        cycleStartDate: '2026-02-27',
-        forgeVersion: '1.0.0',
+        strategy: strategyName || 'baseline',
     };
 }
 
-export function portfolioPath(agentName) {
-    return join(PORTFOLIOS_DIR, `FORGE_${agentName}_Portfolio.json`);
+export function portfolioPath(name) {
+    return join(PORTFOLIOS_DIR, `${name}_Portfolio.json`);
 }
 
-export function loadPortfolio(agentName) {
-    const filePath = portfolioPath(agentName);
+export function loadPortfolio(name) {
+    const filePath = portfolioPath(name);
     if (!existsSync(filePath)) {
-        const portfolio = createNewPortfolio(agentName);
-        savePortfolio(agentName, portfolio);
+        const portfolio = createBacktestPortfolio(STARTING_BALANCE, name);
+        savePortfolio(name, portfolio);
         return portfolio;
     }
     const portfolio = JSON.parse(readFileSync(filePath, 'utf8'));
@@ -55,6 +46,6 @@ export function loadPortfolio(agentName) {
     return portfolio;
 }
 
-export function savePortfolio(agentName, portfolio) {
-    writeFileSync(portfolioPath(agentName), JSON.stringify(portfolio, null, 2));
+export function savePortfolio(name, portfolio) {
+    writeFileSync(portfolioPath(name), JSON.stringify(portfolio, null, 2));
 }

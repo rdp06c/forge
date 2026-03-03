@@ -1,6 +1,22 @@
-// Technical analysis functions — ported from APEX trader.js
+// Technical analysis functions — synced from APEX trader.js (Mar 3, 2026)
 // All functions are pure: they take bars/data as parameters (no globals)
 import { stockSectors } from '../config/constants.js';
+
+// Default weights — mirrors APEX DEFAULT_WEIGHTS
+export const DEFAULT_WEIGHTS = {
+    momentumMultiplier: 0.6, rsMultiplier: 0.6, structureMultiplier: 1.25,
+    accelBonus: 1.5, consistencyBonus: 1.0,
+    sectorInflow: 2.0, sectorModestInflow: 1.0, sectorOutflow: -1.0,
+    rsiOversold30: 2.5, rsiOversold40: 1.5, rsiOversold50: 0.5,
+    rsiOverbought70: -3.0, rsiOverbought80: -5.0,
+    macdBullish: 2.5, macdBearish: -2.0, macdNone: -0.5,
+    rsMeanRev95: -6.0, rsMeanRev90: -4.0, rsMeanRev85: -2.0,
+    squeezeBonusHigh: 1.5, squeezeBonusMod: 0.75,
+    smaProxNear: 2.0, smaProxBelow: 1.0, smaProxFar15: -1.5, smaProxFar10: -0.5,
+    smaCrossoverBullish: 2.0, smaCrossoverBearish: -2.0,
+    fvgBullish: 0.5, fvgBearish: -0.5,
+    entryMultExtreme: 0.3, entryMultExtended: 0.6, entryMultPullback: 1.3
+};
 
 // RSI (Relative Strength Index) using Wilder's smoothing
 export function calculateRSI(bars, period = 14) {
@@ -71,6 +87,23 @@ export function calculateMACD(bars) {
         histogram: Math.round(histogram * 1000) / 1000,
         crossover
     };
+}
+
+// SMA Crossover Detection (Golden/Death Cross — SMA20 vs SMA50)
+export function calculateSMACrossover(bars) {
+    if (!bars || bars.length < 52) return null;
+    const sma20Now = calculateSMA(bars, 20);
+    const sma50Now = calculateSMA(bars, 50);
+    if (sma20Now == null || sma50Now == null) return null;
+    const prevBars = bars.slice(0, -1);
+    const sma20Prev = calculateSMA(prevBars, 20);
+    const sma50Prev = calculateSMA(prevBars, 50);
+    if (sma20Prev == null || sma50Prev == null) return null;
+    let crossover = 'none';
+    if (sma20Prev <= sma50Prev && sma20Now > sma50Now) crossover = 'bullish';
+    else if (sma20Prev >= sma50Prev && sma20Now < sma50Now) crossover = 'bearish';
+    const spread = sma50Now !== 0 ? ((sma20Now - sma50Now) / sma50Now * 100) : 0;
+    return { sma50: sma50Now, crossover, spread: Math.round(spread * 100) / 100 };
 }
 
 // Market Structure Detection: CHoCH, BOS, Sweeps, FVG
@@ -306,31 +339,28 @@ export function detectSectorRotation(marketData, multiDayCache) {
     return sectorAnalysis;
 }
 
-// Composite Score — used for candidate ranking
-// Synced with APEX's rebalanced scoring (Feb 26, 2026): reduced momentum dominance,
-// stronger structure/pullback signals, RS mean-reversion penalty, conditional decline penalty
-export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlow, structureScore, isAccelerating, upDays, totalDays, todayChange, totalReturn5d, rsi, macdCrossover, daysToCover, volumeTrend, fvg }) {
-    // [1] Scale momentum + RS by 0.6 to reduce base dominance (0-12 instead of 0-20)
-    const momentumContrib = momentumScore * 0.6;
-    const rsContrib = rsNormalized * 0.6;
+// Composite Score — synced with APEX's current scoring (Mar 3, 2026)
+// Returns { total, breakdown } matching APEX's format
+export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlow, structureScore, isAccelerating, upDays, totalDays, todayChange, totalReturn5d, rsi, macdCrossover, daysToCover, volumeTrend, fvg, sma20, currentPrice, smaCrossover }, weights) {
+    const w = weights || DEFAULT_WEIGHTS;
+
+    const momentumContrib = momentumScore * w.momentumMultiplier;
+    const rsContrib = rsNormalized * w.rsMultiplier;
 
     let sectorBonus = 0;
-    if (sectorFlow === 'inflow') sectorBonus = 2;
-    else if (sectorFlow === 'modest-inflow') sectorBonus = 1;
-    else if (sectorFlow === 'outflow') sectorBonus = -1;
+    if (sectorFlow === 'inflow') sectorBonus = w.sectorInflow;
+    else if (sectorFlow === 'modest-inflow') sectorBonus = w.sectorModestInflow;
+    else if (sectorFlow === 'outflow') sectorBonus = w.sectorOutflow;
 
-    const accelBonus = isAccelerating && momentumScore >= 6 ? 1.5 : 0;
-    const consistencyBonus = (upDays >= 3 && totalDays >= 4) ? 1.0 : 0;
-    // [6] Increase structure weight: *1.25 (max ±3.75, was ±2.25)
-    const structureBonus = (structureScore || 0) * 1.25;
+    const accelBonus = isAccelerating && momentumScore >= 6 ? w.accelBonus : 0;
+    const consistencyBonus = (upDays >= 3 && totalDays >= 4) ? w.consistencyBonus : 0;
+    const structureBonus = (structureScore || 0) * w.structureMultiplier;
 
     const chg = todayChange || 0;
-    // [7] Scale runner penalty proportionally with 0.6 base reduction
     const runnerPenalty = chg >= 15 ? -3 : chg >= 10 ? -2 : chg >= 7 ? -1 : chg >= 5 ? -0.5 : 0;
-    // [4] Conditional decline penalty: no penalty for bullish structure dips
-    const declinePenalty = (structureScore ?? 0) >= 1
-        ? (chg <= -8 ? -1 : 0)
-        : (chg <= -5 ? -3 : chg <= -3 ? -2 : chg <= -2 ? -1 : 0);
+    // Decline penalty removed: APEX calibration data (r=-0.08 to -0.11, 17K obs)
+    // showed it was anti-predictive at ALL structure levels
+    const declinePenalty = 0;
 
     const extensionPenalty = (momentumScore >= 9 && rsNormalized >= 8.5) ? -5
         : (momentumScore >= 9 || rsNormalized >= 8.5) ? -3.5
@@ -339,7 +369,6 @@ export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlo
         : 0;
 
     const ret5d = totalReturn5d ?? 0;
-    // [3] Bigger, more tiered pullback bonus (max +5, was +2)
     const pullbackBonus =
         (ret5d >= -8 && ret5d <= -2 && (structureScore ?? 0) >= 2 && sectorFlow !== 'outflow') ? 5
         : (ret5d >= -8 && ret5d <= -2 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow' && sectorFlow !== 'modest-outflow') ? 4
@@ -348,37 +377,74 @@ export function calculateCompositeScore({ momentumScore, rsNormalized, sectorFlo
         : (ret5d >= -5 && ret5d < 0 && (structureScore ?? 0) >= 0 && sectorFlow !== 'outflow') ? 1
         : 0;
 
-    // [5] Steeper RSI penalties, broader oversold bonuses
     const rsiBonusPenalty = rsi != null
-        ? (rsi < 30 ? 2.5 : rsi < 40 ? 1.5 : rsi < 50 ? 0.5
-            : rsi > 80 ? -5 : rsi > 70 ? -3 : 0)
+        ? (rsi < 30 ? w.rsiOversold30 : rsi < 40 ? w.rsiOversold40 : rsi < 50 ? w.rsiOversold50
+            : rsi > 80 ? w.rsiOverbought80 : rsi > 70 ? w.rsiOverbought70 : 0)
         : 0;
-    const macdBonus = macdCrossover === 'bullish' ? 2.5 : macdCrossover === 'bearish' ? -2.0 : -0.5;
+    const macdBonus = macdCrossover === 'bullish' ? w.macdBullish : macdCrossover === 'bearish' ? w.macdBearish : w.macdNone;
 
-    // [2] RS mean-reversion penalty: RS=100 has 11.1% win rate in APEX data
-    const rsMeanRevPenalty = rsNormalized >= 9.5 ? -3 : rsNormalized >= 9 ? -2 : rsNormalized >= 8.5 ? -1 : 0;
+    const rsMeanRevPenalty = rsNormalized >= 9.5 ? w.rsMeanRev95 : rsNormalized >= 9 ? w.rsMeanRev90 : rsNormalized >= 8.5 ? w.rsMeanRev85 : 0;
 
     const dtc = daysToCover || 0;
-    const squeezeBonus = (dtc > 5 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow') ? 1.5
-        : (dtc > 3 && (structureScore ?? 0) >= 1) ? 0.75
+    const squeezeBonus = (dtc > 5 && (structureScore ?? 0) >= 1 && sectorFlow !== 'outflow') ? w.squeezeBonusHigh
+        : (dtc > 3 && (structureScore ?? 0) >= 1) ? w.squeezeBonusMod
         : 0;
 
     const vt = volumeTrend ?? 1;
-    const volumeBonus = vt > 1.2 ? 0.5 : vt < 0.8 ? -0.5 : 0;
+    const volumeBonus = (momentumScore >= 7 && vt < 0.7) ? -2.0
+        : (momentumScore >= 7 && vt > 1.3) ? 1.0
+        : (momentumScore < 5 && vt > 1.5 && (structureScore ?? 0) >= 0) ? 1.5
+        : (vt > 1.2 ? 0.5 : vt < 0.8 ? -0.5 : 0);
 
-    const fvgBonus = (fvg === 'bullish' && ret5d < 0 && (structureScore ?? 0) >= 0) ? 0.5
-        : (fvg === 'bearish' && (structureScore ?? 0) < 0) ? -0.5
+    const fvgBonus = (fvg === 'bullish' && ret5d < 0 && (structureScore ?? 0) >= 0) ? w.fvgBullish
+        : (fvg === 'bearish' && (structureScore ?? 0) < 0) ? w.fvgBearish
         : 0;
 
-    return momentumContrib + rsContrib + sectorBonus + accelBonus + consistencyBonus
+    // SMA proximity bonus (new in APEX Mar 2026)
+    let smaProximityBonus = 0;
+    if (sma20 != null && currentPrice != null && sma20 > 0) {
+        const pctFromSMA20 = ((currentPrice - sma20) / sma20) * 100;
+        if (pctFromSMA20 >= 0 && pctFromSMA20 <= 3 && (structureScore ?? 0) >= 1) smaProximityBonus = w.smaProxNear;
+        else if (pctFromSMA20 < 0 && pctFromSMA20 >= -3 && (structureScore ?? 0) >= 1) smaProximityBonus = w.smaProxBelow;
+        else if (pctFromSMA20 > 15) smaProximityBonus = w.smaProxFar15;
+        else if (pctFromSMA20 > 10) smaProximityBonus = w.smaProxFar10;
+    }
+
+    // SMA crossover bonus (new in APEX Mar 2026)
+    const smaCrossoverBonus = smaCrossover?.crossover === 'bullish' ? w.smaCrossoverBullish
+        : smaCrossover?.crossover === 'bearish' ? w.smaCrossoverBearish
+        : 0;
+
+    const additiveScore = momentumContrib + rsContrib + sectorBonus + accelBonus + consistencyBonus
         + structureBonus + extensionPenalty + pullbackBonus + runnerPenalty + declinePenalty
-        + rsiBonusPenalty + macdBonus + rsMeanRevPenalty + squeezeBonus + volumeBonus + fvgBonus;
+        + rsiBonusPenalty + macdBonus + rsMeanRevPenalty + squeezeBonus + volumeBonus + fvgBonus
+        + smaProximityBonus + smaCrossoverBonus;
+
+    // Entry quality multiplier — rewards pullbacks, penalizes extensions
+    let entryMultiplier = 1.0;
+    if (additiveScore > 0) {
+        if (rsi != null && rsi > 80 && momentumScore >= 9) entryMultiplier = w.entryMultExtreme;
+        else if ((rsi != null && rsi > 70) || momentumScore >= 9 || rsNormalized >= 9) entryMultiplier = w.entryMultExtended;
+        else if (ret5d >= -8 && ret5d <= -1 && (structureScore ?? 0) >= 1) entryMultiplier = w.entryMultPullback;
+    }
+
+    const compositeScore = additiveScore * entryMultiplier;
+
+    return {
+        total: compositeScore,
+        breakdown: {
+            momentumContrib, rsContrib, sectorBonus, accelBonus, consistencyBonus,
+            structureBonus, extensionPenalty, pullbackBonus, runnerPenalty, declinePenalty,
+            rsiBonusPenalty, macdBonus, rsMeanRevPenalty, squeezeBonus, volumeBonus, fvgBonus,
+            smaProximityBonus, smaCrossoverBonus, entryMultiplier
+        }
+    };
 }
 
 // ═══════════════════════════════════════════════════
 // Enrich: run all technicals on market data
 // ═══════════════════════════════════════════════════
-export function enrichMarketData(marketData, multiDayCache, tickerDetails, shortInterest, sectorRotation, newsCache) {
+export function enrichMarketData(marketData, multiDayCache, tickerDetails, shortInterest, sectorRotation, newsCache, weights) {
     // Group by sector for RS calc
     const stocksBySector = {};
     for (const [symbol, data] of Object.entries(marketData)) {
@@ -399,6 +465,7 @@ export function enrichMarketData(marketData, multiDayCache, tickerDetails, short
         const rsi = calculateRSI(bars);
         const sma20 = calculateSMA(bars, 20);
         const macd = calculateMACD(bars);
+        const smaCrossover = calculateSMACrossover(bars);
 
         enhanced[symbol] = {
             ...data,
@@ -407,18 +474,18 @@ export function enrichMarketData(marketData, multiDayCache, tickerDetails, short
             relativeStrength,
             sectorRotation: sectorRotation[sector],
             marketStructure,
-            rsi, sma20, macd,
-            marketCap: tickerDetails[symbol]?.marketCap || null,
-            companyName: tickerDetails[symbol]?.name || null,
-            sicDescription: tickerDetails[symbol]?.sicDescription || null,
-            shortInterest: shortInterest[symbol] || null,
+            rsi, sma20, macd, smaCrossover,
+            marketCap: tickerDetails?.[symbol]?.marketCap || null,
+            companyName: tickerDetails?.[symbol]?.name || null,
+            sicDescription: tickerDetails?.[symbol]?.sicDescription || null,
+            shortInterest: shortInterest?.[symbol] || null,
             recentNews: newsCache?.[symbol] || null
         };
     }
 
     // Score and rank
     const scored = Object.entries(enhanced).map(([symbol, data]) => {
-        const compositeScore = calculateCompositeScore({
+        const scoreResult = calculateCompositeScore({
             momentumScore: data.momentum?.score || 0,
             rsNormalized: ((data.relativeStrength?.rsScore || 50) / 100) * 10,
             sectorFlow: data.sectorRotation?.moneyFlow,
@@ -433,9 +500,13 @@ export function enrichMarketData(marketData, multiDayCache, tickerDetails, short
             daysToCover: data.shortInterest?.daysToCover || 0,
             volumeTrend: data.momentum?.volumeTrend ?? 1,
             fvg: data.marketStructure?.fvg,
-        });
-        enhanced[symbol].compositeScore = compositeScore;
-        return { symbol, compositeScore, data: enhanced[symbol] };
+            sma20: data.sma20,
+            currentPrice: data.price,
+            smaCrossover: data.smaCrossover,
+        }, weights);
+        enhanced[symbol].compositeScore = scoreResult.total;
+        enhanced[symbol].scoreBreakdown = scoreResult.breakdown;
+        return { symbol, compositeScore: scoreResult.total, breakdown: scoreResult.breakdown, data: enhanced[symbol] };
     });
 
     scored.sort((a, b) => b.compositeScore - a.compositeScore);

@@ -1,19 +1,16 @@
 {
-  "name": "forge",
-  "version": "1.0.0",
-  "description": "FORGE - APEX Companion Trader Research System",
-  "main": "forge.js",
+  "name": "forge-backtester",
+  "version": "2.0.0",
+  "description": "FORGE Portfolio Backtester — deterministic strategy simulation for APEX",
+  "main": "backtest.js",
   "type": "module",
   "scripts": {
-    "start": "node forge.js",
-    "now": "node forge.js --now",
-    "test-data": "node test-data.js",
+    "backtest": "node backtest.js",
+    "backtest:all": "node backtest.js --all",
+    "test": "node test-backtest.js",
     "dashboard": "node dashboard/server.js"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.39.0",
-    "dotenv": "^16.4.7",
-    "googleapis": "^144.0.0",
-    "node-cron": "^3.0.3"
+    "dotenv": "^16.4.7"
   }
 }

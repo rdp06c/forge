@@ -5,7 +5,7 @@ import { stockSectors, POSITION_SIZING, REGIME_DEPLOYMENT } from '../config/cons
 /**
  * Add N trading days (weekdays) to a date. Returns a new Date.
  */
-function addTradingDays(startDate, days) {
+export function addTradingDays(startDate, days) {
     const d = new Date(startDate);
     let added = 0;
     while (added < days) {
@@ -19,7 +19,7 @@ function addTradingDays(startDate, days) {
 /**
  * Count weekdays (trading days) between two dates, excluding the start date.
  */
-function countTradingDays(startDate, endDate) {
+export function countTradingDays(startDate, endDate) {
     let count = 0;
     const d = new Date(startDate);
     d.setHours(0, 0, 0, 0);
@@ -54,7 +54,7 @@ export function calculatePositionSize(portfolio, conviction, regime, currentPric
     // Adaptive deployment: if win rate in current regime < 45%, reduce by 17.5%
     let adjustedAllocation = targetAllocation;
     const closedInRegime = (portfolio.closedTrades || []).filter(
-        t => (t.forgeMetadata?.regimeAtEntry || t.exitMarketRegime) === regime
+        t => (t.forgeMetadata?.regimeAtEntry || t.exitMarketRegime || t.entryRegime) === regime
     );
     if (closedInRegime.length >= 5) {
         const wins = closedInRegime.filter(t => t.returnPercent > 0).length;
@@ -77,10 +77,12 @@ export function calculatePositionSize(portfolio, conviction, regime, currentPric
 
 /**
  * Execute a BUY trade
+ * @param {string} [opts.simDate] - Simulation date (ISO string or YYYY-MM-DD). Omit for live.
  */
-export function executeBuy(portfolio, { symbol, shares, price, conviction, reasoning, marketData, vix, agentName }) {
+export function executeBuy(portfolio, { symbol, shares, price, conviction, reasoning, marketData, vix, agentName, simDate }) {
+    const now = simDate ? new Date(simDate + 'T16:00:00Z') : new Date();
+
     // Rebuy cooldown: 5-day block after selling a symbol
-    const now = new Date();
     const blocked = (portfolio.blockedTrades || []).find(
         b => b.symbol === symbol && new Date(b.blockedUntil) > now
     );
@@ -100,33 +102,33 @@ export function executeBuy(portfolio, { symbol, shares, price, conviction, reaso
 
     const totalPortfolioValue = portfolio.cash + cost + Object.entries(portfolio.holdings)
         .filter(([s]) => s !== symbol)
-        .reduce((sum, [s, sh]) => sum + (marketData[s]?.price || 0) * sh, 0);
+        .reduce((sum, [s, sh]) => sum + (marketData?.[s]?.price || 0) * sh, 0);
     const positionSizePercent = totalPortfolioValue > 0 ? (cost / totalPortfolioValue) * 100 : 0;
 
     portfolio.transactions.push({
         type: 'BUY',
         symbol, shares, price, cost,
-        timestamp: new Date().toISOString(),
+        timestamp: now.toISOString(),
         conviction,
         reasoning,
         entryTechnicals: {
-            momentumScore: marketData[symbol]?.momentum?.score || null,
-            todayChange: marketData[symbol]?.momentum?.todayChange ?? marketData[symbol]?.changePercent ?? null,
-            totalReturn5d: marketData[symbol]?.momentum?.totalReturn5d ?? null,
-            isAccelerating: marketData[symbol]?.momentum?.isAccelerating ?? null,
-            upDays: marketData[symbol]?.momentum?.upDays ?? null,
-            rsScore: marketData[symbol]?.relativeStrength?.rsScore || null,
-            sectorRotation: marketData[symbol]?.sectorRotation?.rotationSignal || null,
-            structureScore: marketData[symbol]?.marketStructure?.structureScore ?? null,
-            structure: marketData[symbol]?.marketStructure?.structure || null,
-            choch: marketData[symbol]?.marketStructure?.choch || null,
-            chochType: marketData[symbol]?.marketStructure?.chochType || null,
-            bos: marketData[symbol]?.marketStructure?.bos || null,
-            bosType: marketData[symbol]?.marketStructure?.bosType || null,
-            sweep: marketData[symbol]?.marketStructure?.sweep || null,
-            rsi: marketData[symbol]?.rsi ?? null,
-            macdCrossover: marketData[symbol]?.macd?.crossover || null,
-            compositeScore: marketData[symbol]?.compositeScore ?? null,
+            momentumScore: marketData?.[symbol]?.momentum?.score || null,
+            todayChange: marketData?.[symbol]?.momentum?.todayChange ?? marketData?.[symbol]?.changePercent ?? null,
+            totalReturn5d: marketData?.[symbol]?.momentum?.totalReturn5d ?? null,
+            isAccelerating: marketData?.[symbol]?.momentum?.isAccelerating ?? null,
+            upDays: marketData?.[symbol]?.momentum?.upDays ?? null,
+            rsScore: marketData?.[symbol]?.relativeStrength?.rsScore || null,
+            sectorRotation: marketData?.[symbol]?.sectorRotation?.rotationSignal || null,
+            structureScore: marketData?.[symbol]?.marketStructure?.structureScore ?? null,
+            structure: marketData?.[symbol]?.marketStructure?.structure || null,
+            choch: marketData?.[symbol]?.marketStructure?.choch || null,
+            chochType: marketData?.[symbol]?.marketStructure?.chochType || null,
+            bos: marketData?.[symbol]?.marketStructure?.bos || null,
+            bosType: marketData?.[symbol]?.marketStructure?.bosType || null,
+            sweep: marketData?.[symbol]?.marketStructure?.sweep || null,
+            rsi: marketData?.[symbol]?.rsi ?? null,
+            macdCrossover: marketData?.[symbol]?.macd?.crossover || null,
+            compositeScore: marketData?.[symbol]?.compositeScore ?? null,
             vixLevel: vix?.level ?? null,
         },
         entryMarketRegime: portfolio.lastMarketRegime?.regime || null,
@@ -140,14 +142,14 @@ export function executeBuy(portfolio, { symbol, shares, price, conviction, reaso
             originalCatalyst: reasoning || '',
             entryConviction: conviction,
             entryPrice: price,
-            entryDate: new Date().toISOString(),
+            entryDate: now.toISOString(),
             entryRegime: portfolio.lastMarketRegime?.regime || null,
-            entryMomentum: marketData[symbol]?.momentum?.score || null,
-            entryRS: marketData[symbol]?.relativeStrength?.rsScore || null,
-            entrySectorFlow: marketData[symbol]?.sectorRotation?.moneyFlow || null,
-            entryRSI: marketData[symbol]?.rsi ?? null,
-            entryStructure: marketData[symbol]?.marketStructure?.structure || null,
-            entryCompositeScore: marketData[symbol]?.compositeScore ?? null,
+            entryMomentum: marketData?.[symbol]?.momentum?.score || null,
+            entryRS: marketData?.[symbol]?.relativeStrength?.rsScore || null,
+            entrySectorFlow: marketData?.[symbol]?.sectorRotation?.moneyFlow || null,
+            entryRSI: marketData?.[symbol]?.rsi ?? null,
+            entryStructure: marketData?.[symbol]?.marketStructure?.structure || null,
+            entryCompositeScore: marketData?.[symbol]?.compositeScore ?? null,
             entryVIX: vix?.level ?? null,
         };
     }
@@ -179,26 +181,29 @@ export function getCurrentPositionBuys(portfolio, symbol) {
 
 /**
  * Execute a SELL trade
+ * @param {string} [opts.simDate] - Simulation date (ISO string or YYYY-MM-DD). Omit for live.
  */
-export function executeSell(portfolio, { symbol, shares, price, conviction, reasoning, exitReason, marketData, vix, agentName, forgeMetadata }) {
+export function executeSell(portfolio, { symbol, shares, price, conviction, reasoning, exitReason, marketData, vix, agentName, forgeMetadata, simDate }) {
     const held = portfolio.holdings[symbol] || 0;
     if (held < shares) {
         console.log(`  [${agentName}] Can't sell ${shares} ${symbol} — only hold ${held}`);
         return false;
     }
 
+    const now = simDate ? new Date(simDate + 'T16:00:00Z') : new Date();
+
     // Anti-whipsaw: block same-day sells
     const buys = getCurrentPositionBuys(portfolio, symbol);
     if (buys.length > 0) {
-        const buyDate = new Date(buys[0].timestamp).toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-        const today = new Date().toLocaleDateString('en-US', { timeZone: 'America/New_York' });
-        if (buyDate === today) {
+        const buyDateStr = new Date(buys[0].timestamp).toISOString().split('T')[0];
+        const nowDateStr = now.toISOString().split('T')[0];
+        if (buyDateStr === nowDateStr) {
             console.log(`  [${agentName}] Anti-whipsaw: blocking same-day sell of ${symbol}`);
             return false;
         }
 
         // Hold discipline: < 3 trading days — only sell if stop-loss triggered (-15% or worse)
-        const holdDays = countTradingDays(new Date(buys[0].timestamp), new Date());
+        const holdDays = countTradingDays(new Date(buys[0].timestamp), now);
         if (holdDays < 3) {
             const totalBuyCost = buys.reduce((s, t) => s + t.cost, 0);
             const totalBuyShares = buys.reduce((s, t) => s + t.shares, 0);
@@ -227,20 +232,13 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
         const avgBuyPrice = totalBuyShares > 0 ? totalBuyCost / totalBuyShares : 0;
         const profitLoss = avgBuyPrice > 0 ? (price - avgBuyPrice) * shares : 0;
         const returnPercent = avgBuyPrice > 0 ? ((price - avgBuyPrice) / avgBuyPrice) * 100 : 0;
+        const holdTimeDays = countTradingDays(new Date(buys[0].timestamp), now);
 
         // Determine exit reason if not provided
         if (!exitReason) {
             if (returnPercent >= 2) exitReason = 'profit_target';
             else if (returnPercent <= -8) exitReason = 'stop_loss';
-            else if (reasoning) {
-                const r = reasoning.toLowerCase();
-                if (r.includes('stop loss') || r.includes('stop-loss')) exitReason = 'stop_loss';
-                else if (r.includes('redeploy') || r.includes('better use')) exitReason = 'opportunity_cost';
-                else if (r.includes('catalyst') || r.includes('thesis')) exitReason = 'catalyst_failure';
-                else exitReason = returnPercent < 0 ? 'catalyst_failure' : 'profit_target';
-            } else {
-                exitReason = 'manual';
-            }
+            else exitReason = returnPercent < 0 ? 'catalyst_failure' : 'profit_target';
         }
 
         portfolio.closedTrades = portfolio.closedTrades || [];
@@ -251,17 +249,18 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
             sellPrice: price,
             shares, profitLoss, returnPercent,
             buyDate: buys[0].timestamp,
-            sellDate: new Date().toISOString(),
-            holdTime: Date.now() - new Date(buys[0].timestamp).getTime(),
+            sellDate: now.toISOString(),
+            holdTime: now.getTime() - new Date(buys[0].timestamp).getTime(),
+            holdTimeDays,
             entryConviction: buys[0].conviction || null,
             entryTechnicals: buys[0].entryTechnicals || {},
+            entryRegime: buys[0].entryMarketRegime || null,
             exitReason,
             exitReasoning: reasoning || '',
             exitConviction: conviction || null,
             exitMarketRegime: portfolio.lastMarketRegime?.regime || null,
             tracking: { priceAfter1Week: null, priceAfter1Month: null, tracked: false },
-            // FORGE-specific
-            agent: agentName,
+            agent: agentName || 'backtester',
             forgeMetadata: forgeMetadata || {},
         });
 
@@ -272,14 +271,14 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
         portfolio.blockedTrades = portfolio.blockedTrades || [];
         portfolio.blockedTrades.push({
             symbol,
-            blockedUntil: addTradingDays(new Date(), 5).toISOString(),
+            blockedUntil: addTradingDays(now, 5).toISOString(),
             reason: 'rebuy_cooldown',
         });
     }
 
     portfolio.transactions.push({
         type: 'SELL', symbol, shares, price,
-        timestamp: new Date().toISOString(),
+        timestamp: now.toISOString(),
         revenue,
     });
 

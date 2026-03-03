@@ -2,8 +2,8 @@
 // All functions take explicit parameters (no globals), use file cache, no DOM references
 import { cache } from './cache.js';
 
-const POLYGON_BASE = 'https://api.polygon.io';
-const API_KEY = () => process.env.POLYGON_API_KEY;
+export const POLYGON_BASE = 'https://api.polygon.io';
+export const API_KEY = () => process.env.POLYGON_API_KEY;
 
 // Cache TTLs
 const MULTIDAY_CACHE_TTL = 4 * 60 * 60 * 1000;   // 4 hours
@@ -12,7 +12,7 @@ const SHORT_INTEREST_TTL = 24 * 60 * 60 * 1000;     // 24 hours
 const NEWS_CACHE_TTL     = 60 * 60 * 1000;           // 1 hour
 const VIX_CACHE_TTL      = 4 * 60 * 60 * 1000;      // 4 hours
 
-const sleep = ms => new Promise(r => setTimeout(r, ms));
+export const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 // ═══════════════════════════════════════════════════
 // Grouped Daily Bars — 40 trading days of OHLCV

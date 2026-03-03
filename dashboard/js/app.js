@@ -1,152 +1,417 @@
-// FORGE Dashboard — Shared state, navigation, data fetching, helpers
-// Must be loaded first — defines window.FORGE namespace
+// FORGE Backtester Dashboard — Client-side application
 
-window.FORGE = {
-    state: {
-        agentsData: null,
-        currentDetailAgent: null,
-        closedTradesCache: {}, // agent -> closedTrades[] for modal
-    },
-    charts: {
-        valueChart: null,
-        winRateChart: null,
-        adherenceChart: null,
-        durationChart: null,
-    },
-    AGENT_COLORS: {
-        Ember: '#f59e0b', Strike: '#ef4444', Flux: '#a855f7',
-        Draft: '#3b82f6', Alloy: '#22c55e'
-    },
-    AGENT_NAMES: ['Ember', 'Strike', 'Flux', 'Draft', 'Alloy'],
-};
+const COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7', '#f59e0b', '#06b6d4'];
 
-// --- Navigation ---
+let chartInstances = {};
 
-document.querySelectorAll('.nav button').forEach(btn => {
-    btn.addEventListener('click', () => {
-        const view = btn.dataset.view;
-        if (view === 'detail' && !FORGE.state.currentDetailAgent) return;
-        FORGE.showView(view);
-    });
-});
+// ═══════════════════════════════════════════════════
+// Navigation
+// ═══════════════════════════════════════════════════
 
-FORGE.showView = function(name) {
+function showView(viewName) {
     document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
     document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
-    document.getElementById(`view-${name}`).classList.add('active');
-    document.querySelector(`.nav button[data-view="${name}"]`)?.classList.add('active');
-    if (name === 'charts') FORGE.renderCharts();
-    if (name === 'compare') FORGE.renderCompare();
-    if (name === 'heatmap') FORGE.renderHeatmap();
-    if (name === 'leaderboard') FORGE.renderLeaderboard();
-};
 
-// --- Data fetching ---
+    const view = document.getElementById('view-' + viewName);
+    if (view) view.classList.add('active');
 
-FORGE.fetchData = async function() {
+    const btn = document.querySelector(`.nav button[data-view="${viewName}"]`);
+    if (btn) btn.classList.add('active');
+
+    if (viewName === 'overview') loadOverview();
+    if (viewName === 'comparison') loadComparison();
+}
+
+document.querySelectorAll('.nav button').forEach(btn => {
+    btn.addEventListener('click', () => showView(btn.dataset.view));
+});
+
+// ═══════════════════════════════════════════════════
+// Overview — list of backtest results
+// ═══════════════════════════════════════════════════
+
+async function loadOverview() {
+    const el = document.getElementById('results-list');
     try {
-        const res = await fetch('/api/agents');
-        FORGE.state.agentsData = await res.json();
-        FORGE.renderOverview();
-        FORGE.updateHeader();
-    } catch (e) {
-        console.error('Failed to fetch agents:', e);
+        const resp = await fetch('/api/results');
+        const { results } = await resp.json();
+
+        if (!results || results.length === 0) {
+            el.innerHTML = `<div class="empty-state">
+                <h2>No backtest results yet</h2>
+                <p>Run a backtest to see results here</p>
+                <code>node backtest.js --strategy=baseline</code>
+            </div>`;
+            return;
+        }
+
+        el.innerHTML = `<table class="results-table">
+            <thead><tr>
+                <th>Strategy</th><th>Period</th><th>Return</th><th>SPY</th>
+                <th>Sharpe</th><th>Win Rate</th><th>Trades</th><th>Max DD</th><th>PF</th>
+            </tr></thead>
+            <tbody>${results.map(r => {
+                if (r.error) return `<tr><td colspan="9">${r.filename} — error loading</td></tr>`;
+                const retClass = (r.totalReturn || 0) >= 0 ? 'positive' : 'negative';
+                const spyClass = (r.spyReturn || 0) >= 0 ? 'positive' : 'negative';
+                return `<tr onclick="loadDetail('${r.filename}')">
+                    <td><strong>${r.strategy}</strong></td>
+                    <td>${r.startDate || '?'} &rarr; ${r.endDate || '?'}</td>
+                    <td class="${retClass}">${fmtSign(r.totalReturn, '%')}</td>
+                    <td class="${spyClass}">${fmtSign(r.spyReturn, '%')}</td>
+                    <td>${r.sharpe ?? 'N/A'}</td>
+                    <td>${fmt(r.winRate, '%')}</td>
+                    <td>${r.totalTrades ?? 0}</td>
+                    <td class="negative">${r.maxDrawdown != null ? '-' + r.maxDrawdown + '%' : 'N/A'}</td>
+                    <td>${r.profitFactor ?? 'N/A'}</td>
+                </tr>`;
+            }).join('')}</tbody>
+        </table>`;
+    } catch (err) {
+        el.innerHTML = `<div class="empty-state"><h2>Error loading results</h2><p>${err.message}</p></div>`;
     }
-};
+}
 
-FORGE.updateHeader = function() {
-    const data = FORGE.state.agentsData;
-    if (!data?.agents?.length) return;
-    const first = data.agents.find(a => a.metrics);
-    if (!first?.metrics) return;
+// ═══════════════════════════════════════════════════
+// Detail — full metrics for one backtest result
+// ═══════════════════════════════════════════════════
 
-    const m = first.metrics;
-    document.getElementById('cycle-id').textContent = m.cycleId || 'Cycle 1';
+async function loadDetail(filename) {
+    const el = document.getElementById('detail-content');
+    const tab = document.getElementById('detail-tab');
+    tab.style.display = '';
 
-    const regimeBadge = document.getElementById('regime-badge');
-    if (m.regime) {
-        regimeBadge.textContent = m.regime.toUpperCase();
-        regimeBadge.className = `badge badge-${m.regime}`;
+    try {
+        const resp = await fetch('/api/result/' + encodeURIComponent(filename));
+        const data = await resp.json();
+        if (data.error) { el.innerHTML = `<p>${data.error}</p>`; showView('detail'); return; }
+
+        const m = data.metrics || {};
+        const trades = data.portfolio?.closedTrades || [];
+
+        // Metrics cards
+        let html = `<h2 style="margin-bottom:16px">${data.strategy} <span style="color:var(--text-muted);font-size:13px">${m.equityCurve?.[0]?.date || ''} &rarr; ${m.equityCurve?.[m.equityCurve.length-1]?.date || ''}</span></h2>`;
+
+        html += `<div class="metrics-grid">
+            ${metricCard('Total Return', fmtSign(m.totalReturn, '%'), m.totalReturn >= 0)}
+            ${metricCard('Annualized', fmtSign(m.annualizedReturn, '%'), m.annualizedReturn >= 0)}
+            ${metricCard('Final Value', '$' + (m.finalValue?.toLocaleString() || '?'), true, '$' + (m.initialBalance?.toLocaleString() || '?') + ' initial')}
+            ${metricCard('Max Drawdown', '-' + m.maxDrawdown + '%', false, m.maxDrawdownDuration + ' days')}
+            ${metricCard('Sharpe Ratio', m.sharpe ?? 'N/A', (m.sharpe || 0) >= 0)}
+            ${metricCard('SPY Return', fmtSign(m.spyReturn, '%'), (m.spyReturn || 0) >= 0)}
+            ${metricCard('Win Rate', fmt(m.winRate, '%'), (m.winRate || 0) >= 50)}
+            ${metricCard('Total Trades', m.totalTrades, true)}
+            ${metricCard('Avg Winner', '+' + m.avgWinner + '%', true)}
+            ${metricCard('Avg Loser', m.avgLoser + '%', false)}
+            ${metricCard('Profit Factor', m.profitFactor, (m.profitFactor || 0) >= 1)}
+            ${metricCard('Avg Hold', m.avgHoldDays + 'd', true)}
+        </div>`;
+
+        // Equity curve chart
+        html += `<div class="charts-row">
+            <div class="chart-box full-width"><h3>Equity Curve</h3><canvas id="equity-chart"></canvas></div>
+        </div>`;
+
+        // Regime performance
+        if (m.byRegime && Object.keys(m.byRegime).length > 0) {
+            html += `<h3 class="section-header">Regime Performance</h3><div class="regime-grid">`;
+            for (const [regime, d] of Object.entries(m.byRegime)) {
+                const badgeClass = regime === 'bull' ? 'badge-bull' : regime === 'bear' ? 'badge-bear' : 'badge-choppy';
+                html += `<div class="metric-card">
+                    <div class="label"><span class="badge ${badgeClass}">${regime}</span></div>
+                    <div class="value">${d.trades} trades</div>
+                    <div class="sub">${d.winRate}% win rate &middot; ${d.totalPL >= 0 ? '+' : ''}$${d.totalPL.toLocaleString()}</div>
+                </div>`;
+            }
+            html += `</div>`;
+        }
+
+        // Exit reasons
+        if (m.exitReasons && Object.keys(m.exitReasons).length > 0) {
+            html += `<h3 class="section-header">Exit Reasons</h3>`;
+            const maxCount = Math.max(...Object.values(m.exitReasons));
+            for (const [reason, count] of Object.entries(m.exitReasons)) {
+                const pct = m.totalTrades > 0 ? ((count / m.totalTrades) * 100).toFixed(1) : '0';
+                const width = maxCount > 0 ? (count / maxCount * 100) : 0;
+                html += `<div class="exit-bar">
+                    <span class="exit-bar-label">${reason}</span>
+                    <div class="exit-bar-fill" style="width:${width}%"></div>
+                    <span class="exit-bar-count">${count} (${pct}%)</span>
+                </div>`;
+            }
+        }
+
+        // Trade log
+        if (trades.length > 0) {
+            html += `<h3 class="section-header">Trade Log (${trades.length} trades)</h3>`;
+            html += `<div class="filters">
+                <select id="filter-exit" onchange="filterTrades()">
+                    <option value="">All exits</option>
+                    ${[...new Set(trades.map(t => t.exitReason))].map(r => `<option value="${r}">${r}</option>`).join('')}
+                </select>
+                <select id="filter-result" onchange="filterTrades()">
+                    <option value="">All results</option>
+                    <option value="win">Winners</option>
+                    <option value="loss">Losers</option>
+                </select>
+            </div>`;
+            html += `<div class="table-section"><div class="table-wrap">
+                <table class="data-table" id="trade-table">
+                    <thead><tr>
+                        <th>Symbol</th><th>Sector</th><th>Buy</th><th>Sell</th>
+                        <th>Return</th><th>P&L</th><th>Hold</th><th>Exit</th><th>Regime</th>
+                    </tr></thead>
+                    <tbody>${trades.map(t => {
+                        const retClass = (t.returnPercent || 0) >= 0 ? 'positive' : 'negative';
+                        return `<tr data-exit="${t.exitReason || ''}" data-result="${(t.profitLoss || 0) >= 0 ? 'win' : 'loss'}">
+                            <td><strong>${t.symbol}</strong></td>
+                            <td style="color:var(--text-muted)">${t.sector || '?'}</td>
+                            <td>$${t.buyPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.buyDate?.split('T')[0] || '?'}</span></td>
+                            <td>$${t.sellPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.sellDate?.split('T')[0] || '?'}</span></td>
+                            <td class="${retClass}">${fmtSign(t.returnPercent, '%')}</td>
+                            <td class="${retClass}">${t.profitLoss >= 0 ? '+' : ''}$${t.profitLoss?.toFixed(2) || '0'}</td>
+                            <td>${t.holdTimeDays ?? '?'}d</td>
+                            <td>${t.exitReason || '?'}</td>
+                            <td>${t.entryRegime || '?'}</td>
+                        </tr>`;
+                    }).join('')}</tbody>
+                </table>
+            </div></div>`;
+        }
+
+        el.innerHTML = html;
+        showView('detail');
+
+        // Draw equity curve
+        if (m.equityCurve?.length > 0) {
+            drawEquityCurve('equity-chart', m.equityCurve, m.initialBalance);
+        }
+
+    } catch (err) {
+        el.innerHTML = `<p>Error: ${err.message}</p>`;
+        showView('detail');
     }
+}
 
-    if (m.vix) {
-        document.getElementById('vix-level').textContent = m.vix.level?.toFixed(2) || '--';
+function filterTrades() {
+    const exitFilter = document.getElementById('filter-exit')?.value || '';
+    const resultFilter = document.getElementById('filter-result')?.value || '';
+    const rows = document.querySelectorAll('#trade-table tbody tr');
+    rows.forEach(row => {
+        const matchExit = !exitFilter || row.dataset.exit === exitFilter;
+        const matchResult = !resultFilter || row.dataset.result === resultFilter;
+        row.style.display = matchExit && matchResult ? '' : 'none';
+    });
+}
+
+// ═══════════════════════════════════════════════════
+// Comparison — all strategies side by side
+// ═══════════════════════════════════════════════════
+
+async function loadComparison() {
+    const el = document.getElementById('comparison-content');
+    try {
+        const resp = await fetch('/api/comparison');
+        const { results } = await resp.json();
+
+        if (!results || results.length === 0) {
+            el.innerHTML = `<div class="empty-state">
+                <h2>No results to compare</h2>
+                <p>Run multiple strategies to see a comparison</p>
+                <code>node backtest.js --all</code>
+            </div>`;
+            return;
+        }
+
+        // Comparison table
+        const metrics = [
+            { key: 'totalReturn', label: 'Return', fmt: v => fmtSign(v, '%'), higher: true },
+            { key: 'sharpe', label: 'Sharpe', fmt: v => v ?? 'N/A', higher: true },
+            { key: 'winRate', label: 'Win Rate', fmt: v => fmt(v, '%'), higher: true },
+            { key: 'totalTrades', label: 'Trades', fmt: v => v, higher: false },
+            { key: 'maxDrawdown', label: 'Max DD', fmt: v => '-' + v + '%', higher: false },
+            { key: 'profitFactor', label: 'Profit Factor', fmt: v => v ?? 'N/A', higher: true },
+            { key: 'spyReturn', label: 'SPY Return', fmt: v => fmtSign(v, '%'), higher: false },
+        ];
+
+        let html = `<div class="table-section"><table class="compare-table">
+            <thead><tr><th>Metric</th>${results.map(r => `<th>${r.strategy}</th>`).join('')}</tr></thead>
+            <tbody>`;
+
+        for (const m of metrics) {
+            const vals = results.map(r => r[m.key]);
+            const bestIdx = m.higher ? indexOfMax(vals) : indexOfMin(vals);
+            html += `<tr><td style="color:var(--text-muted)">${m.label}</td>`;
+            results.forEach((r, i) => {
+                const isBest = i === bestIdx && results.length > 1 && m.key !== 'spyReturn';
+                html += `<td class="${isBest ? 'best' : ''}">${m.fmt(r[m.key])}</td>`;
+            });
+            html += `</tr>`;
+        }
+        html += `</tbody></table></div>`;
+
+        // Equity curve overlay
+        const curvesExist = results.some(r => r.equityCurve?.length > 0);
+        if (curvesExist) {
+            html += `<div class="chart-box"><h3>Equity Curves — All Strategies</h3><canvas id="compare-chart"></canvas></div>`;
+        }
+
+        el.innerHTML = html;
+
+        if (curvesExist) {
+            drawComparisonChart('compare-chart', results);
+        }
+
+    } catch (err) {
+        el.innerHTML = `<div class="empty-state"><h2>Error</h2><p>${err.message}</p></div>`;
     }
+}
 
-    if (m.lastUpdated) {
-        const d = new Date(m.lastUpdated);
-        document.getElementById('last-updated').textContent = d.toLocaleDateString('en-US', {
-            month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit'
+// ═══════════════════════════════════════════════════
+// Charts
+// ═══════════════════════════════════════════════════
+
+function drawEquityCurve(canvasId, equityCurve, initialBalance) {
+    destroyChart(canvasId);
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+
+    const labels = equityCurve.map(p => p.date);
+    const values = equityCurve.map(p => p.value);
+
+    chartInstances[canvasId] = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Portfolio Value',
+                data: values,
+                borderColor: '#3b82f6',
+                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                fill: true,
+                tension: 0.1,
+                pointRadius: 0,
+                borderWidth: 2,
+            }, {
+                label: 'Initial Balance',
+                data: labels.map(() => initialBalance),
+                borderColor: '#4b5563',
+                borderDash: [5, 5],
+                pointRadius: 0,
+                borderWidth: 1,
+            }],
+        },
+        options: chartOptions('$'),
+    });
+}
+
+function drawComparisonChart(canvasId, results) {
+    destroyChart(canvasId);
+    const ctx = document.getElementById(canvasId);
+    if (!ctx) return;
+
+    // Normalize all to % return from start
+    const datasets = results
+        .filter(r => r.equityCurve?.length > 0)
+        .map((r, i) => {
+            const initial = r.equityCurve[0]?.value || 1;
+            return {
+                label: r.strategy,
+                data: r.equityCurve.map(p => ((p.value - initial) / initial * 100)),
+                borderColor: COLORS[i % COLORS.length],
+                tension: 0.1,
+                pointRadius: 0,
+                borderWidth: 2,
+            };
         });
-        const hoursSince = (Date.now() - d.getTime()) / 3600000;
-        document.getElementById('stale-warning').style.display = hoursSince > 48 ? '' : 'none';
-    }
-};
 
-// --- Helpers ---
+    // Use the longest curve's dates as labels
+    const longest = results.reduce((a, b) => (a.equityCurve?.length || 0) > (b.equityCurve?.length || 0) ? a : b);
+    const labels = (longest.equityCurve || []).map(p => p.date);
 
-FORGE.fmt = function(n) {
-    if (n == null) return '--';
-    return n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-};
+    chartInstances[canvasId] = new Chart(ctx, {
+        type: 'line',
+        data: { labels, datasets },
+        options: chartOptions('%'),
+    });
+}
 
-FORGE.truncate = function(s, len) {
-    if (!s) return '';
-    return s.length > len ? s.substring(0, len) + '...' : s;
-};
-
-FORGE.winRateBadge = function(rate) {
-    if (rate === null || rate === undefined) return '<span class="badge badge-gray">--</span>';
-    if (rate >= 60) return `<span class="badge badge-green">${rate}% WR</span>`;
-    if (rate >= 45) return `<span class="badge badge-yellow">${rate}% WR</span>`;
-    return `<span class="badge badge-red">${rate}% WR</span>`;
-};
-
-FORGE.adherenceBadge = function(pct) {
-    if (pct === null || pct === undefined) return '<span class="badge badge-gray">--</span>';
-    if (pct >= 100) return `<span class="badge badge-green">${pct}%</span>`;
-    if (pct >= 80) return `<span class="badge badge-yellow">${pct}%</span>`;
-    return `<span class="badge badge-red">${pct}%</span>`;
-};
-
-FORGE.chartOptions = function(unit, annotations) {
-    const opts = {
+function chartOptions(suffix) {
+    return {
         responsive: true,
         maintainAspectRatio: false,
-        interaction: { mode: 'index', intersect: false },
-        plugins: {
-            legend: {
-                labels: { color: '#8b8fa3', font: { family: 'inherit', size: 11 } }
-            },
-            tooltip: {
-                callbacks: {
-                    label: ctx => `${ctx.dataset.label}: ${unit === '$' ? '$' + ctx.parsed.y.toLocaleString() : ctx.parsed.y.toFixed(1) + '%'}`
-                }
-            }
-        },
+        interaction: { intersect: false, mode: 'index' },
         scales: {
             x: {
-                type: 'category',
-                ticks: { color: '#5a5e72', font: { size: 10 }, maxTicksLimit: 15 },
-                grid: { color: '#1f2233' },
+                ticks: { color: '#5a5e72', maxTicksLimit: 12, font: { size: 10 } },
+                grid: { color: '#1a1d27' },
             },
             y: {
                 ticks: {
                     color: '#5a5e72',
                     font: { size: 10 },
-                    callback: v => unit === '$' ? '$' + v.toLocaleString() : v + '%'
+                    callback: v => suffix === '$' ? '$' + v.toLocaleString() : v.toFixed(1) + '%',
                 },
-                grid: { color: '#1f2233' },
-            }
-        }
+                grid: { color: '#1a1d27' },
+            },
+        },
+        plugins: {
+            legend: { labels: { color: '#8b8fa3', font: { size: 11 } } },
+            tooltip: {
+                backgroundColor: '#1a1d27',
+                borderColor: '#2a2e3f',
+                borderWidth: 1,
+                titleColor: '#e4e6ed',
+                bodyColor: '#8b8fa3',
+            },
+        },
     };
-    // F1: Regime background annotations
-    if (annotations && Object.keys(annotations).length > 0) {
-        opts.plugins.annotation = { annotations };
-    }
-    return opts;
-};
+}
 
-// --- Init ---
-FORGE.fetchData();
-setInterval(FORGE.fetchData, 60000);
+function destroyChart(id) {
+    if (chartInstances[id]) {
+        chartInstances[id].destroy();
+        delete chartInstances[id];
+    }
+}
+
+// ═══════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════
+
+function fmt(v, suffix = '') {
+    if (v == null) return 'N/A';
+    return v + suffix;
+}
+
+function fmtSign(v, suffix = '') {
+    if (v == null) return 'N/A';
+    return (v >= 0 ? '+' : '') + v + suffix;
+}
+
+function metricCard(label, value, isPositive, sub = '') {
+    const cls = isPositive ? 'positive' : 'negative';
+    return `<div class="metric-card">
+        <div class="label">${label}</div>
+        <div class="value ${cls}">${value}</div>
+        ${sub ? `<div class="sub">${sub}</div>` : ''}
+    </div>`;
+}
+
+function indexOfMax(arr) {
+    let max = -Infinity, idx = -1;
+    arr.forEach((v, i) => { if (v != null && v > max) { max = v; idx = i; } });
+    return idx;
+}
+
+function indexOfMin(arr) {
+    let min = Infinity, idx = -1;
+    arr.forEach((v, i) => { if (v != null && v < min) { min = v; idx = i; } });
+    return idx;
+}
+
+// ═══════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════
+
+loadOverview();
