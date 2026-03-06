@@ -397,7 +397,70 @@ const baselineBearBuys = processEntries(baselinePortfolio, overrideEnhanced, ove
 assert(bearBuys >= baselineBearBuys, 'RegimeIgnore buys >= baseline in bear market');
 
 // ═══════════════════════════════════════════════════
-// 14. DataManager (unit tests — no API calls)
+// 14. Score Attribution on Closed Trades
+// ═══════════════════════════════════════════════════
+section('Score Attribution');
+
+// Buy with scoreBreakdown available in marketData, then sell with changed breakdown
+const attrPortfolio = createBacktestPortfolio(50000, 'test');
+const entryBreakdown = {
+    momentumContrib: 4.2, rsContrib: 3.6, sectorBonus: 1.5, accelBonus: 1.0,
+    consistencyBonus: 0.5, structureBonus: 2.5, extensionPenalty: 0, pullbackBonus: 0,
+    runnerPenalty: 0, declinePenalty: 0, rsiBonusPenalty: 0, macdBonus: 1.0,
+    rsMeanRevPenalty: 0, squeezeBonus: 0, volumeBonus: 0, fvgBonus: 0,
+    smaProximityBonus: 2.0, smaCrossoverBonus: 0, entryMultiplier: 1.0,
+};
+const exitBreakdown = {
+    momentumContrib: 1.8, rsContrib: 1.2, sectorBonus: 0, accelBonus: 0,
+    consistencyBonus: 0, structureBonus: 0.5, extensionPenalty: -1.5, pullbackBonus: 0,
+    runnerPenalty: 0, declinePenalty: 0, rsiBonusPenalty: -1.0, macdBonus: 0,
+    rsMeanRevPenalty: 0, squeezeBonus: 0, volumeBonus: 0, fvgBonus: 0,
+    smaProximityBonus: 0, smaCrossoverBonus: 0, entryMultiplier: 0.6,
+};
+
+const attrEntryData = {
+    ATTR: {
+        price: 100, compositeScore: 16.3,
+        scoreBreakdown: entryBreakdown,
+        momentum: { score: 7 }, relativeStrength: { rsScore: 60 },
+    },
+};
+executeBuy(attrPortfolio, {
+    symbol: 'ATTR', shares: 10, price: 100, conviction: 9,
+    reasoning: 'Test', marketData: attrEntryData, agentName: 'Test', simDate: '2026-01-15',
+});
+
+// Verify entry breakdown stored in thesis
+assert(attrPortfolio.holdingTheses.ATTR.entryBreakdown != null, 'Entry breakdown stored in thesis');
+assert(attrPortfolio.holdingTheses.ATTR.entryBreakdown.momentumContrib === 4.2, 'Entry momentum contrib correct');
+
+// Now sell with degraded scores
+const attrExitData = {
+    ATTR: {
+        price: 95, compositeScore: 1.2,
+        scoreBreakdown: exitBreakdown,
+        momentum: { score: 3 }, relativeStrength: { rsScore: 20 },
+    },
+};
+executeSell(attrPortfolio, {
+    symbol: 'ATTR', shares: 10, price: 95, exitReason: 'score_degradation',
+    reasoning: 'Test', marketData: attrExitData, agentName: 'Test', simDate: '2026-01-22',
+});
+
+const attrTrade = attrPortfolio.closedTrades[0];
+assert(attrTrade.entryBreakdown != null, 'Closed trade has entryBreakdown');
+assert(attrTrade.exitBreakdown != null, 'Closed trade has exitBreakdown');
+assert(attrTrade.breakdownDelta != null, 'Closed trade has breakdownDelta');
+assert(attrTrade.entryBreakdown.momentumContrib === 4.2, 'Entry momentum preserved');
+assert(attrTrade.exitBreakdown.momentumContrib === 1.8, 'Exit momentum captured');
+assert(attrTrade.breakdownDelta.momentumContrib === -2.4, 'Momentum delta = -2.4');
+assert(attrTrade.breakdownDelta.structureBonus === -2.0, 'Structure delta = -2.0');
+assert(attrTrade.breakdownDelta.extensionPenalty === -1.5, 'Extension penalty delta = -1.5');
+assert(attrTrade.entryCompositeScore === 16.3, 'Entry composite score stored');
+assert(attrTrade.exitCompositeScore === 1.2, 'Exit composite score stored');
+
+// ═══════════════════════════════════════════════════
+// 15. DataManager (unit tests — no API calls)
 // ═══════════════════════════════════════════════════
 section('DataManager Windowing');
 

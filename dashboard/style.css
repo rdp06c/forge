@@ -369,6 +369,20 @@ body {
     color: var(--blue);
 }
 
+/* --- Attribution rows --- */
+
+tr.clickable { cursor: pointer; }
+tr.clickable:hover td { background: var(--bg-hover); }
+
+tr.attr-row td {
+    padding: 0 10px 10px 10px;
+    background: var(--bg-primary);
+    border-bottom: 2px solid var(--border);
+}
+
+.attribution-table { max-width: 500px; }
+.attribution-table table { margin: 8px 0; }
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {

@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const RESULTS_DIR = join(__dirname, '..', 'results');
+const APEX_PORTFOLIO_PATH = join('/home/rdp06c/Apex/server/data/portfolio.json');
 const PORT = 3000;
 
 // --- Result loading ---
@@ -74,6 +75,67 @@ function handleComparison(res) {
     sendJSON(res, { results: details });
 }
 
+function handleMyTrades(res) {
+    if (!existsSync(APEX_PORTFOLIO_PATH)) {
+        return sendJSON(res, { error: 'APEX portfolio not found', path: APEX_PORTFOLIO_PATH }, 404);
+    }
+    try {
+        const raw = JSON.parse(readFileSync(APEX_PORTFOLIO_PATH, 'utf8'));
+        const transactions = raw.transactions || [];
+        const closedTrades = raw.closedTrades || [];
+        const holdings = raw.holdings || {};
+        const initialBalance = raw.initialBalance || 1000;
+
+        // Reconstruct equity curve from transactions
+        // Group transactions by date, compute cumulative cash + holdings value
+        const txByDate = {};
+        for (const tx of transactions) {
+            const date = tx.timestamp.split('T')[0];
+            if (!txByDate[date]) txByDate[date] = [];
+            txByDate[date].push(tx);
+        }
+
+        // Compute summary metrics from closed trades
+        const wins = closedTrades.filter(t => t.profitLoss > 0);
+        const losses = closedTrades.filter(t => t.profitLoss <= 0);
+        const totalPL = closedTrades.reduce((s, t) => s + (t.profitLoss || 0), 0);
+        const winRate = closedTrades.length > 0 ? (wins.length / closedTrades.length * 100) : 0;
+        const avgWinner = wins.length > 0 ? wins.reduce((s, t) => s + t.returnPercent, 0) / wins.length : 0;
+        const avgLoser = losses.length > 0 ? losses.reduce((s, t) => s + t.returnPercent, 0) / losses.length : 0;
+        const grossWins = wins.reduce((s, t) => s + t.profitLoss, 0);
+        const grossLosses = Math.abs(losses.reduce((s, t) => s + t.profitLoss, 0));
+        const profitFactor = grossLosses > 0 ? Math.round(grossWins / grossLosses * 100) / 100 : null;
+        const avgHoldMs = closedTrades.length > 0 ? closedTrades.reduce((s, t) => s + (t.holdTime || 0), 0) / closedTrades.length : 0;
+        const avgHoldDays = Math.round(avgHoldMs / 86400000 * 10) / 10;
+
+        // First and last trade dates
+        const firstDate = transactions.length > 0 ? transactions[0].timestamp.split('T')[0] : null;
+        const lastDate = transactions.length > 0 ? transactions[transactions.length - 1].timestamp.split('T')[0] : null;
+
+        sendJSON(res, {
+            initialBalance,
+            cash: raw.cash,
+            holdings,
+            closedTrades,
+            transactions,
+            firstDate,
+            lastDate,
+            metrics: {
+                totalTrades: closedTrades.length,
+                openPositions: Object.keys(holdings).length,
+                totalPL: Math.round(totalPL * 100) / 100,
+                winRate: Math.round(winRate * 100) / 100,
+                avgWinner: Math.round(avgWinner * 100) / 100,
+                avgLoser: Math.round(avgLoser * 100) / 100,
+                profitFactor,
+                avgHoldDays,
+            },
+        });
+    } catch (err) {
+        sendJSON(res, { error: 'Failed to parse APEX portfolio: ' + err.message }, 500);
+    }
+}
+
 // --- Static file serving ---
 
 const MIME = {
@@ -111,6 +173,7 @@ const server = createServer((req, res) => {
     // API routes
     if (urlPath === '/api/results') return handleResults(res);
     if (urlPath === '/api/comparison') return handleComparison(res);
+    if (urlPath === '/api/my-trades') return handleMyTrades(res);
 
     const resultMatch = urlPath.match(/^\/api\/result\/(.+\.json)$/);
     if (resultMatch) return handleResult(res, decodeURIComponent(resultMatch[1]));

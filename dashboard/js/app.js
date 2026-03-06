@@ -20,6 +20,7 @@ function showView(viewName) {
 
     if (viewName === 'overview') loadOverview();
     if (viewName === 'comparison') loadComparison();
+    if (viewName === 'mytrades') loadMyTrades();
 }
 
 document.querySelectorAll('.nav button').forEach(btn => {
@@ -161,10 +162,11 @@ async function loadDetail(filename) {
                         <th>Symbol</th><th>Sector</th><th>Buy</th><th>Sell</th>
                         <th>Return</th><th>P&L</th><th>Hold</th><th>Exit</th><th>Regime</th>
                     </tr></thead>
-                    <tbody>${trades.map(t => {
+                    <tbody>${trades.map((t, idx) => {
                         const retClass = (t.returnPercent || 0) >= 0 ? 'positive' : 'negative';
-                        return `<tr data-exit="${t.exitReason || ''}" data-result="${(t.profitLoss || 0) >= 0 ? 'win' : 'loss'}">
-                            <td><strong>${t.symbol}</strong></td>
+                        const hasAttr = t.entryBreakdown || t.exitBreakdown;
+                        return `<tr data-exit="${t.exitReason || ''}" data-result="${(t.profitLoss || 0) >= 0 ? 'win' : 'loss'}" ${hasAttr ? `class="clickable" onclick="toggleAttribution(${idx})"` : ''}>
+                            <td><strong>${t.symbol}</strong>${hasAttr ? ' <span style="color:var(--text-muted);font-size:9px">▸</span>' : ''}</td>
                             <td style="color:var(--text-muted)">${t.sector || '?'}</td>
                             <td>$${t.buyPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.buyDate?.split('T')[0] || '?'}</span></td>
                             <td>$${t.sellPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.sellDate?.split('T')[0] || '?'}</span></td>
@@ -173,7 +175,8 @@ async function loadDetail(filename) {
                             <td>${t.holdTimeDays ?? '?'}d</td>
                             <td>${t.exitReason || '?'}</td>
                             <td>${t.entryRegime || '?'}</td>
-                        </tr>`;
+                        </tr>
+                        ${hasAttr ? `<tr class="attr-row" id="attr-${idx}" style="display:none"><td colspan="9">${renderAttribution(t)}</td></tr>` : ''}`;
                     }).join('')}</tbody>
                 </table>
             </div></div>`;
@@ -191,6 +194,11 @@ async function loadDetail(filename) {
         el.innerHTML = `<p>Error: ${err.message}</p>`;
         showView('detail');
     }
+}
+
+function toggleAttribution(idx) {
+    const row = document.getElementById('attr-' + idx);
+    if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
 }
 
 function filterTrades() {
@@ -265,6 +273,152 @@ async function loadComparison() {
     } catch (err) {
         el.innerHTML = `<div class="empty-state"><h2>Error</h2><p>${err.message}</p></div>`;
     }
+}
+
+// ═══════════════════════════════════════════════════
+// My Trades — APEX live trade comparison
+// ═══════════════════════════════════════════════════
+
+async function loadMyTrades() {
+    const el = document.getElementById('mytrades-content');
+    try {
+        const [myResp, compResp] = await Promise.all([
+            fetch('/api/my-trades'),
+            fetch('/api/comparison'),
+        ]);
+        const myData = await myResp.json();
+        const compData = await compResp.json();
+
+        if (myData.error) {
+            el.innerHTML = `<div class="empty-state"><h2>APEX Portfolio Not Found</h2><p>${myData.error}</p></div>`;
+            return;
+        }
+
+        const m = myData.metrics;
+        const closed = myData.closedTrades || [];
+        const benchmarks = compData.results || [];
+
+        let html = `<h2 style="margin-bottom:8px">My Trades vs Benchmarks</h2>
+            <p style="color:var(--text-muted);margin-bottom:16px">${myData.firstDate || '?'} &rarr; ${myData.lastDate || '?'} &middot; ${m.totalTrades} closed trades &middot; ${m.openPositions} open positions</p>`;
+
+        // Metrics cards
+        html += `<div class="metrics-grid">
+            ${metricCard('Closed P&L', (m.totalPL >= 0 ? '+$' : '-$') + Math.abs(m.totalPL).toLocaleString(), m.totalPL >= 0)}
+            ${metricCard('Win Rate', fmt(m.winRate, '%'), m.winRate >= 50)}
+            ${metricCard('Avg Winner', '+' + m.avgWinner + '%', true)}
+            ${metricCard('Avg Loser', m.avgLoser + '%', false)}
+            ${metricCard('Profit Factor', m.profitFactor ?? 'N/A', (m.profitFactor || 0) >= 1)}
+            ${metricCard('Avg Hold', m.avgHoldDays + 'd', true)}
+        </div>`;
+
+        // Comparison table: my trades vs each benchmark (over overlapping period only)
+        if (benchmarks.length > 0) {
+            html += `<h3 class="section-header">Benchmark Comparison</h3>`;
+            html += `<div class="table-section"><table class="compare-table">
+                <thead><tr><th>Metric</th><th>My Trades</th>${benchmarks.map(b => `<th>${b.strategy}</th>`).join('')}</tr></thead>
+                <tbody>
+                    <tr><td style="color:var(--text-muted)">Win Rate</td><td>${fmt(m.winRate, '%')}</td>${benchmarks.map(b => `<td>${fmt(b.winRate, '%')}</td>`).join('')}</tr>
+                    <tr><td style="color:var(--text-muted)">Profit Factor</td><td>${m.profitFactor ?? 'N/A'}</td>${benchmarks.map(b => `<td>${b.profitFactor ?? 'N/A'}</td>`).join('')}</tr>
+                    <tr><td style="color:var(--text-muted)">Total Trades</td><td>${m.totalTrades}</td>${benchmarks.map(b => `<td>${b.totalTrades ?? 0}</td>`).join('')}</tr>
+                    <tr><td style="color:var(--text-muted)">Avg Winner</td><td>+${m.avgWinner}%</td>${benchmarks.map(b => `<td>—</td>`).join('')}</tr>
+                    <tr><td style="color:var(--text-muted)">Avg Loser</td><td>${m.avgLoser}%</td>${benchmarks.map(b => `<td>—</td>`).join('')}</tr>
+                </tbody>
+            </table></div>`;
+        }
+
+        // Trade log with attribution
+        if (closed.length > 0) {
+            html += `<h3 class="section-header">Closed Trades (${closed.length})</h3>`;
+            html += `<div class="table-section"><div class="table-wrap">
+                <table class="data-table">
+                    <thead><tr>
+                        <th>Symbol</th><th>Buy</th><th>Sell</th>
+                        <th>Return</th><th>P&L</th><th>Hold</th><th>Exit</th>
+                    </tr></thead>
+                    <tbody>${closed.map(t => {
+                        const retClass = (t.returnPercent || 0) >= 0 ? 'positive' : 'negative';
+                        const holdDays = t.holdTime ? Math.round(t.holdTime / 86400000 * 10) / 10 : '?';
+                        return `<tr>
+                            <td><strong>${t.symbol}</strong></td>
+                            <td>$${t.buyPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.buyDate?.split('T')[0] || '?'}</span></td>
+                            <td>$${t.sellPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.sellDate?.split('T')[0] || '?'}</span></td>
+                            <td class="${retClass}">${fmtSign(Math.round(t.returnPercent * 100) / 100, '%')}</td>
+                            <td class="${retClass}">${t.profitLoss >= 0 ? '+' : ''}$${t.profitLoss?.toFixed(2) || '0'}</td>
+                            <td>${holdDays}d</td>
+                            <td>${t.exitReason || '?'}</td>
+                        </tr>`;
+                    }).join('')}</tbody>
+                </table>
+            </div></div>`;
+        }
+
+        // Open positions
+        const holdingSymbols = Object.keys(myData.holdings || {});
+        if (holdingSymbols.length > 0) {
+            html += `<h3 class="section-header">Open Positions (${holdingSymbols.length})</h3>`;
+            html += `<div class="metrics-grid">`;
+            for (const sym of holdingSymbols) {
+                const shares = myData.holdings[sym];
+                html += `<div class="metric-card"><div class="label">${sym}</div><div class="value">${shares} shares</div></div>`;
+            }
+            html += `</div>`;
+        }
+
+        el.innerHTML = html;
+    } catch (err) {
+        el.innerHTML = `<div class="empty-state"><h2>Error</h2><p>${err.message}</p></div>`;
+    }
+}
+
+// ═══════════════════════════════════════════════════
+// Attribution — score breakdown display for FORGE trades
+// ═══════════════════════════════════════════════════
+
+function renderAttribution(trade) {
+    if (!trade.entryBreakdown && !trade.exitBreakdown) return '';
+
+    const keys = [
+        { key: 'momentumContrib', label: 'Momentum' },
+        { key: 'rsContrib', label: 'Rel Strength' },
+        { key: 'structureBonus', label: 'Structure' },
+        { key: 'sectorBonus', label: 'Sector' },
+        { key: 'smaProximityBonus', label: 'SMA Prox' },
+        { key: 'smaCrossoverBonus', label: 'SMA Cross' },
+        { key: 'accelBonus', label: 'Accel' },
+        { key: 'consistencyBonus', label: 'Consistency' },
+        { key: 'macdBonus', label: 'MACD' },
+        { key: 'extensionPenalty', label: 'Extension' },
+        { key: 'pullbackBonus', label: 'Pullback' },
+        { key: 'rsiBonusPenalty', label: 'RSI' },
+        { key: 'entryMultiplier', label: 'Entry Mult' },
+    ];
+
+    const entry = trade.entryBreakdown || {};
+    const exit = trade.exitBreakdown || {};
+    const delta = trade.breakdownDelta || {};
+
+    let rows = '';
+    for (const { key, label } of keys) {
+        const eVal = entry[key] ?? '—';
+        const xVal = exit[key] ?? '—';
+        const dVal = delta[key];
+        const dStr = dVal != null ? (dVal >= 0 ? '+' : '') + dVal.toFixed(2) : '—';
+        const dClass = dVal > 0 ? 'positive' : dVal < 0 ? 'negative' : '';
+        // Skip rows where both entry and exit are 0 or null
+        if ((entry[key] ?? 0) === 0 && (exit[key] ?? 0) === 0) continue;
+        rows += `<tr><td style="color:var(--text-muted)">${label}</td><td>${typeof eVal === 'number' ? eVal.toFixed(2) : eVal}</td><td>${typeof xVal === 'number' ? xVal.toFixed(2) : xVal}</td><td class="${dClass}">${dStr}</td></tr>`;
+    }
+
+    if (!rows) return '';
+    return `<div class="attribution-table">
+        <table class="data-table" style="font-size:11px">
+            <thead><tr><th>Signal</th><th>Entry</th><th>Exit</th><th>Delta</th></tr></thead>
+            <tbody>
+                <tr style="font-weight:bold"><td>Composite</td><td>${trade.entryCompositeScore?.toFixed(1) ?? '—'}</td><td>${trade.exitCompositeScore?.toFixed(1) ?? '—'}</td><td class="${(trade.exitCompositeScore - trade.entryCompositeScore) >= 0 ? 'positive' : 'negative'}">${trade.entryCompositeScore != null && trade.exitCompositeScore != null ? fmtSign(Math.round((trade.exitCompositeScore - trade.entryCompositeScore) * 10) / 10, '') : '—'}</td></tr>
+                ${rows}
+            </tbody>
+        </table>
+    </div>`;
 }
 
 // ═══════════════════════════════════════════════════

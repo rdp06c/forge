@@ -150,6 +150,7 @@ export function executeBuy(portfolio, { symbol, shares, price, conviction, reaso
             entryRSI: marketData?.[symbol]?.rsi ?? null,
             entryStructure: marketData?.[symbol]?.marketStructure?.structure || null,
             entryCompositeScore: marketData?.[symbol]?.compositeScore ?? null,
+            entryBreakdown: marketData?.[symbol]?.scoreBreakdown || null,
             entryVIX: vix?.level ?? null,
         };
     }
@@ -220,6 +221,9 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
     portfolio.cash += revenue;
     portfolio.holdings[symbol] -= shares;
 
+    // Capture thesis before cleanup (needed for attribution)
+    const thesis = portfolio.holdingTheses?.[symbol] || null;
+
     if (portfolio.holdings[symbol] === 0) {
         delete portfolio.holdings[symbol];
         if (portfolio.holdingTheses?.[symbol]) delete portfolio.holdingTheses[symbol];
@@ -241,6 +245,21 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
             else exitReason = returnPercent < 0 ? 'catalyst_failure' : 'profit_target';
         }
 
+        // Score attribution: capture entry/exit breakdowns and delta
+        const entryBreakdown = thesis?.entryBreakdown || null;
+        const entryCompositeScore = thesis?.entryCompositeScore ?? null;
+        const exitBreakdown = marketData?.[symbol]?.scoreBreakdown || null;
+        const exitCompositeScore = marketData?.[symbol]?.compositeScore ?? null;
+        let breakdownDelta = null;
+        if (entryBreakdown && exitBreakdown) {
+            breakdownDelta = {};
+            for (const key of Object.keys(entryBreakdown)) {
+                const entryVal = entryBreakdown[key] ?? 0;
+                const exitVal = exitBreakdown[key] ?? 0;
+                breakdownDelta[key] = Math.round((exitVal - entryVal) * 1000) / 1000;
+            }
+        }
+
         portfolio.closedTrades = portfolio.closedTrades || [];
         portfolio.closedTrades.push({
             symbol,
@@ -255,6 +274,11 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
             entryConviction: buys[0].conviction || null,
             entryTechnicals: buys[0].entryTechnicals || {},
             entryRegime: buys[0].entryMarketRegime || null,
+            entryCompositeScore,
+            entryBreakdown,
+            exitCompositeScore,
+            exitBreakdown,
+            breakdownDelta,
             exitReason,
             exitReasoning: reasoning || '',
             exitConviction: conviction || null,
