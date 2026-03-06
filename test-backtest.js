@@ -341,7 +341,63 @@ for (const [name, strategy] of Object.entries(STRATEGIES)) {
 }
 
 // ═══════════════════════════════════════════════════
-// 12. DataManager (unit tests — no API calls)
+// 12. New Strategy-Specific Tests
+// ═══════════════════════════════════════════════════
+section('New Strategy Configs');
+
+// Conservative: high conviction floor, fewer holdings
+const conservative = STRATEGIES.conservative;
+assert(conservative.convictionMap.floor >= 8, 'Conservative floor >= 8');
+assert(conservative.entry.maxHoldings <= 6, 'Conservative max holdings <= 6');
+assert(scoreToConviction(11, conservative.convictionMap) === 0, 'Conservative rejects score 11');
+assert(scoreToConviction(12, conservative.convictionMap) >= 8, 'Conservative accepts score 12+');
+
+// PatientExit: longer holds, stricter degradation threshold
+const patientExit = STRATEGIES.patientExit;
+assert(patientExit.exit.holdDiscipline.minHoldDays >= 8, 'PatientExit min hold >= 8 days');
+assert(patientExit.exit.scoreDegradation.dropThreshold < 0.5, 'PatientExit degradation threshold stricter than baseline');
+assert(patientExit.exit.mechanicalTarget === null, 'PatientExit has no mechanical target');
+
+// RegimeIgnore: deployment override to always be fully deployed
+const regimeIgnore = STRATEGIES.regimeIgnore;
+assert(regimeIgnore.entry.deploymentOverride, 'RegimeIgnore has deployment override');
+assert(regimeIgnore.entry.deploymentOverride.min >= 0.90, 'RegimeIgnore deploys 90%+ regardless of regime');
+
+// ═══════════════════════════════════════════════════
+// 13. Deployment Override in Entry Rules
+// ═══════════════════════════════════════════════════
+section('Deployment Override');
+
+import { processEntries } from './engine/entry-rules.js';
+
+// Create a bear market scenario with regimeIgnore strategy — should still deploy
+const overridePortfolio = createBacktestPortfolio(50000, 'test');
+const overrideEnhanced = {};
+const overrideScored = [];
+for (let i = 0; i < 10; i++) {
+    const sym = `OVR${i}`;
+    overrideEnhanced[sym] = {
+        price: 100,
+        bars: Array(20).fill({ o: 99, h: 101, l: 98, c: 100, v: 1000000, t: Date.now() }),
+        momentum: { score: 7, volumeTrend: 1.1 },
+        relativeStrength: { rsScore: 60 },
+        compositeScore: 15,
+    };
+    overrideScored.push({ symbol: sym, compositeScore: 15, data: overrideEnhanced[sym] });
+}
+
+// With regimeIgnore in bear market, should still buy (deployment override)
+const bearBuys = processEntries(overridePortfolio, overrideEnhanced, overrideScored, {}, 'bear', regimeIgnore, '2026-01-15', 35);
+assert(bearBuys > 0, 'RegimeIgnore buys in bear market');
+
+// With baseline in bear market and same setup, deployment cap is tighter
+const baselinePortfolio = createBacktestPortfolio(50000, 'test');
+const baselineBearBuys = processEntries(baselinePortfolio, overrideEnhanced, overrideScored, {}, 'bear', baseline, '2026-01-15', 35);
+// Both should buy since starting from 100% cash, but regimeIgnore should buy at least as many
+assert(bearBuys >= baselineBearBuys, 'RegimeIgnore buys >= baseline in bear market');
+
+// ═══════════════════════════════════════════════════
+// 14. DataManager (unit tests — no API calls)
 // ═══════════════════════════════════════════════════
 section('DataManager Windowing');
 

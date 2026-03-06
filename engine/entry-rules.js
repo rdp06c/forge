@@ -38,8 +38,8 @@ export function processEntries(portfolio, enhanced, scored, sectorRotation, regi
         totalValue += shares * (enhanced[sym]?.price || 0);
     }
     const currentDeployed = totalValue - portfolio.cash;
-    const regimeDeploy = REGIME_DEPLOYMENT[regime] || REGIME_DEPLOYMENT.choppy;
-    const maxDeployment = totalValue * ((regimeDeploy.min + regimeDeploy.max) / 2);
+    const deployLimits = entryRules.deploymentOverride || REGIME_DEPLOYMENT[regime] || REGIME_DEPLOYMENT.choppy;
+    const maxDeployment = totalValue * ((deployLimits.min + deployLimits.max) / 2);
 
     for (const candidate of candidates) {
         const { symbol, compositeScore, data } = candidate;

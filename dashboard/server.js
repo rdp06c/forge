@@ -60,7 +60,13 @@ function handleResult(res, filename) {
 }
 
 function handleComparison(res) {
-    const results = listResults().filter(r => !r.error);
+    const all = listResults().filter(r => !r.error);
+    // Keep only the latest run per strategy (last alphabetically = most recent dates)
+    const latestByStrategy = new Map();
+    for (const r of all) {
+        latestByStrategy.set(r.strategy, r);
+    }
+    const results = [...latestByStrategy.values()];
     const details = results.map(r => {
         const data = loadResult(r.filename);
         return data ? { ...r, equityCurve: data.metrics?.equityCurve || [] } : r;

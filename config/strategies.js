@@ -179,6 +179,140 @@ export const STRATEGIES = {
             includeHoldings: true,
         },
     },
+
+    conservative: {
+        name: 'Conservative',
+        description: 'High-conviction only — benchmark for "what if I only took my best ideas"',
+        convictionMap: {
+            tiers: [
+                { minScore: 18, conviction: 10 },
+                { minScore: 15, conviction: 9 },
+                { minScore: 12, conviction: 8 },
+            ],
+            floor: 8,
+        },
+        entry: {
+            maxHoldings: 5,
+            maxSectorConcentration: 0.40,
+            redFlagGate: true,
+            volumeGate: null,
+            maxBuysPerDay: 2,
+        },
+        exit: {
+            stopLossTiers: [
+                { threshold: -0.05, action: 'watch' },
+                { threshold: -0.10, action: 'warning' },
+                { threshold: -0.15, action: 'mandatory_sell' },
+            ],
+            scoreDegradation: {
+                enabled: true,
+                dropThreshold: 0.5,
+            },
+            mechanicalTarget: null,
+            holdDiscipline: {
+                minHoldDays: 3,
+                stopOverrideAt: -0.15,
+            },
+            rebuyCooldownDays: 5,
+        },
+        pool: {
+            topN: 15,
+            sectorWildcards: 3,
+            reversalCandidates: 5,
+            includeHoldings: true,
+        },
+    },
+
+    patientExit: {
+        name: 'Patient Exit',
+        description: 'Extended holds, slower exits — benchmark for "what if I sat on my hands longer"',
+        convictionMap: {
+            tiers: [
+                { minScore: 18, conviction: 10 },
+                { minScore: 15, conviction: 9 },
+                { minScore: 12, conviction: 8 },
+                { minScore: 9, conviction: 7 },
+                { minScore: 6, conviction: 6 },
+            ],
+            floor: 6,
+        },
+        entry: {
+            maxHoldings: 12,
+            maxSectorConcentration: 0.35,
+            redFlagGate: true,
+            volumeGate: null,
+            maxBuysPerDay: 3,
+        },
+        exit: {
+            stopLossTiers: [
+                { threshold: -0.05, action: 'watch' },
+                { threshold: -0.10, action: 'warning' },
+                { threshold: -0.15, action: 'mandatory_sell' },
+            ],
+            scoreDegradation: {
+                enabled: true,
+                dropThreshold: 0.35,
+            },
+            mechanicalTarget: null,
+            holdDiscipline: {
+                minHoldDays: 8,
+                stopOverrideAt: -0.15,
+            },
+            rebuyCooldownDays: 5,
+        },
+        pool: {
+            topN: 25,
+            sectorWildcards: 5,
+            reversalCandidates: 10,
+            includeHoldings: true,
+        },
+    },
+
+    regimeIgnore: {
+        name: 'Regime Ignore',
+        description: 'No regime adjustment — benchmark for "is the regime system earning its keep"',
+        convictionMap: {
+            tiers: [
+                { minScore: 18, conviction: 10 },
+                { minScore: 15, conviction: 9 },
+                { minScore: 12, conviction: 8 },
+                { minScore: 9, conviction: 7 },
+                { minScore: 6, conviction: 6 },
+            ],
+            floor: 6,
+        },
+        entry: {
+            maxHoldings: 12,
+            maxSectorConcentration: 0.35,
+            redFlagGate: true,
+            volumeGate: null,
+            maxBuysPerDay: 3,
+            deploymentOverride: { min: 0.90, max: 1.00 },
+        },
+        exit: {
+            stopLossTiers: [
+                { threshold: -0.05, action: 'watch' },
+                { threshold: -0.10, action: 'warning' },
+                { threshold: -0.15, action: 'mandatory_sell' },
+            ],
+            scoreDegradation: {
+                enabled: true,
+                dropThreshold: 0.5,
+            },
+            mechanicalTarget: null,
+            holdDiscipline: {
+                minHoldDays: 3,
+                stopOverrideAt: -0.15,
+            },
+            rebuyCooldownDays: 5,
+        },
+        pool: {
+            topN: 25,
+            sectorWildcards: 5,
+            reversalCandidates: 10,
+            includeHoldings: true,
+        },
+    },
 };
 
 export const STRATEGY_NAMES = Object.keys(STRATEGIES);

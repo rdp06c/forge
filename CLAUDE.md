@@ -6,7 +6,11 @@
 
 ## Overview
 
-FORGE is a deterministic portfolio backtester that simulates APEX's trading logic over historical market data. It replaces the original FORGE agent system (5 AI paper-trading agents) which was retired after APEX's calibration engine (17K+ historical observations) empirically answered most of the agents' thesis questions.
+FORGE is a deterministic portfolio backtester that benchmarks mechanical trading rule sets against historical market data. It replaces the original FORGE agent system (5 AI paper-trading agents) which was retired after APEX's calibration engine (17K+ historical observations) empirically answered most of the agents' thesis questions.
+
+APEX has evolved from an autonomous AI trader to a **scorecard guidance system** — it scores and ranks candidates using the same calibrated formulas, but Ryan makes all conviction assignments and buy/sell decisions. The AI no longer trades autonomously.
+
+FORGE's role is to **benchmark mechanical rule sets** that Ryan can compare against his discretionary performance. It answers: "if I followed this exact ruleset mechanically, what would the historical results look like?" This gives Ryan a performance floor/ceiling for each strategy and helps identify which rules add value versus which are better left to human judgment.
 
 FORGE tests things calibration CAN'T answer: full portfolio simulation with position sizing, deployment caps, hold discipline, exit strategies, and regime-aware behavior over extended historical periods.
 
@@ -85,12 +89,15 @@ Each strategy is a plain config object defining:
 - **exit rules** — stopLoss tiers, scoreDegradation, mechanicalTarget, holdDiscipline
 - **pool config** — topN, wildcards, reversals
 
-| Strategy | What It Tests |
+| Strategy | What It Benchmarks |
 |---|---|
-| `baseline` | APEX's current logic as deterministic rules |
+| `baseline` | APEX's scoring rules as a mechanical system — Ryan's performance floor |
 | `earlyExit` | Strike's thesis: mechanical 55% target exit |
-| `volumeGated` | Draft's thesis: hard 1.5x ADV volume gate |
+| `volumeGated` | Draft's thesis: hard 1.5x ADV breakout/pullback volume gate |
 | `aggressive` | Lower thresholds, wider stops, more holdings |
+| `conservative` | High-conviction only (8+), max 5 holdings — "what if I only took my best ideas" |
+| `patientExit` | 8-day min hold, stricter degradation — "what if I sat on my hands longer" |
+| `regimeIgnore` | 90-100% deployed regardless of VIX — "is the regime system earning its keep" |
 
 ---
 
@@ -100,7 +107,7 @@ Each strategy is a plain config object defining:
 backtest.js                  # CLI entry point
 test-backtest.js             # 96 tests across all modules
 config/constants.js          # ~490 stocks, sectors, position sizing tables
-config/strategies.js         # Strategy definitions (baseline, earlyExit, volumeGated, aggressive)
+config/strategies.js         # Strategy definitions (7 strategies — see table above)
 data/cache.js                # File-based JSON cache with TTL
 data/polygon.js              # Polygon API functions
 data/technicals.js           # Technical indicators + composite scoring (synced from APEX)
