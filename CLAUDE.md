@@ -1,18 +1,19 @@
-# FORGE Backtester
-## Deterministic Portfolio Simulation for APEX
+# FORGE Signal Backtester
+## Signal x Exit Strategy Matrix for APEX
 ### Project Brief for Claude Code / Opus
 
 ---
 
 ## Overview
 
-FORGE is a deterministic portfolio backtester that benchmarks mechanical trading rule sets against historical market data. It replaces the original FORGE agent system (5 AI paper-trading agents) which was retired after APEX's calibration engine (17K+ historical observations) empirically answered most of the agents' thesis questions.
+FORGE is a deterministic signal backtester that tests APEX's entry signals against different exit strategies across multiple time periods. It answers two questions:
 
-APEX has evolved from an autonomous AI trader to a **scorecard guidance system** — it scores and ranks candidates using the same calibrated formulas, but Ryan makes all conviction assignments and buy/sell decisions. The AI no longer trades autonomously.
+1. **Do APEX's entry signals predict winners?** Tested against a NOSIGNAL baseline (composite-score-only entries) to measure alpha.
+2. **Which exit strategy works best per signal?** A matrix of 18 exit strategies tested across 6mo, 1yr, 3yr, 5yr, and 8yr windows to find durable edges.
 
-FORGE's role is to **benchmark mechanical rule sets** that Ryan can compare against his discretionary performance. It answers: "if I followed this exact ruleset mechanically, what would the historical results look like?" This gives Ryan a performance floor/ceiling for each strategy and helps identify which rules add value versus which are better left to human judgment.
+APEX is a **scorecard guidance system** — it scores and ranks candidates using calibrated formulas, but Ryan makes all buy/sell decisions. FORGE provides mechanical benchmarks so Ryan can see which rules add value versus which are better left to judgment.
 
-FORGE tests things calibration CAN'T answer: full portfolio simulation with position sizing, deployment caps, hold discipline, exit strategies, and regime-aware behavior over extended historical periods.
+**Key finding (March 2026):** The REV (Reversal) signal is genuinely predictive — profitable with every exit strategy over 8 years. The most durable exit strategies across all time periods are `target20_trail10` (+20% target or 10% trailing stop) and `target20` (+20% fixed target).
 
 **No AI calls** — all decisions are deterministic. Cost = Polygon API only.
 
@@ -59,45 +60,59 @@ When asked to do something, just do it - including obvious follow-up actions nee
 
 `DataManager.getMarketState(simDate)` is the single enforcement point. All downstream code only sees windowed data (bars with timestamp <= simDate, last 80 bars). This is the critical design constraint.
 
+### Data Flow (Per Sim Day)
+
+```
+DataManager.getMarketState(simDate)  [anti-look-ahead windowing]
+  → technicals.js: raw indicators (RSI, MACD, SMA, structure, momentum, RS, ATR, etc.)
+  → scoring.js: composite score (synced from APEX) + enrichment orchestration
+  → signals.js: evaluate 6 entry signal patterns per stock
+  → Engine loop (compute enrichment ONCE, then for each signal x exit combo):
+      candidate-pool.js → entry-rules.js → exit-rules.js → snapshot
+```
+
+### Entry Signals (data/signals.js — ported from APEX)
+
+| Signal | Criteria | Min Match | Calibration Edge |
+|---|---|---|---|
+| REV | MACD bull, RSI<40, Bull structure, Pullback -2% to -8% | 2 of 4 | **+19pp** (positive) |
+| MOM | Momentum 5-8, RSI<50, Bull structure, RS>50 | 3 of 4 | Negative |
+| QMO | Vol<0.5x, Momentum≥7, Bull structure, RSI<70 | 3 of 4 | Flat/negative |
+| SQZ | DTC>5, Bull structure, Sector inflow | 2 of 3 | Cold |
+| LDR | RS>60, Sector inflow, Bull structure | 2 of 3 | Mixed |
+| AVOID | RSI>70, Runner +5%, Momentum≥9, Vol declining | 2 of 4 | Anti-pattern (blocks entries) |
+
+Each evaluator returns `{ quality: 'full'|'strong'|'partial'|null }`. Signal quality maps to conviction: full=9, strong=8, partial=7.
+
+### Exit Strategies (config/strategies.js)
+
+18 exit configs — every strategy must have a defined exit for both winners AND losers:
+- **Fixed targets**: +10%, +15%, +20%, +30% (with -10% stop)
+- **Time-based**: 5, 8, 10, 15, 20 trading days (with -10% stop)
+- **Score degradation**: 50%, 35% drop thresholds
+- **Trailing stops**: 5%, 8%, 10%, 2xATR
+- **Combinations**: target+trailing, time+trailing
+
+Exit evaluation order (first match wins): hard stop → profit target → trailing stop → time-based → score degradation.
+
 ### Scoring Sync with APEX
 
-`data/technicals.js` must match APEX's current `calculateCompositeScore()`. Synced from APEX Mar 3, 2026. Key scoring details:
-- Decline penalty = 0 (calibration proved anti-predictive, r=-0.08 to -0.11)
+`data/scoring.js` contains `calculateCompositeScore()` synced from APEX Mar 3, 2026:
+- Decline penalty = 0 (calibration proved anti-predictive)
 - Momentum and RS scaled 0.6x (was overweighted)
 - Structure weight 1.25x (was underweighted)
-- SMA proximity bonus (+2.0 near SMA20, -1.5 extended above)
-- SMA crossover bonus (golden/death cross detection)
+- SMA proximity/crossover bonuses
 - Entry quality multiplier (0.3x extreme → 1.3x pullback)
-- Returns `{ total, breakdown }` (not plain number)
+- Returns `{ total, breakdown }`
 
-### Simulation Loop (engine/engine.js)
+### Two Execution Modes
 
-For each trading day:
-1. `dataManager.getMarketState(simDate)` → windowed bars
-2. `enrichMarketData()` → technicals + composite scores
-3. `determineRegime(vix, sectorRotation)` → regime
-4. `processExits()` → sell signals evaluated, executed
-5. `processEntries()` → candidate pool built, entries executed
-6. Record daily snapshot
-7. After final day: force-close all positions, compute metrics
+- **Realistic**: Capital-constrained ($30K default), conviction-based position sizing, regime deployment caps. Answers "what would my actual portfolio return?"
+- **Unconstrained** (`--unconstrained`): Infinite cash, fixed $5K positions, no caps. Answers "does this signal actually predict winners?" Pure signal accuracy.
 
-### Strategies (config/strategies.js)
+### Matrix Mode (engine/engine.js)
 
-Each strategy is a plain config object defining:
-- **convictionMap** — score thresholds → conviction levels
-- **entry rules** — maxHoldings, sectorConcentration, redFlagGate, volumeGate
-- **exit rules** — stopLoss tiers, scoreDegradation, mechanicalTarget, holdDiscipline
-- **pool config** — topN, wildcards, reversals
-
-| Strategy | What It Benchmarks |
-|---|---|
-| `baseline` | APEX's scoring rules as a mechanical system — Ryan's performance floor |
-| `earlyExit` | Strike's thesis: mechanical 55% target exit |
-| `volumeGated` | Draft's thesis: hard 1.5x ADV breakout/pullback volume gate |
-| `aggressive` | Lower thresholds, wider stops, more holdings |
-| `conservative` | High-conviction only (8+), max 5 holdings — "what if I only took my best ideas" |
-| `patientExit` | 8-day min hold, stricter degradation — "what if I sat on my hands longer" |
-| `regimeIgnore` | 90-100% deployed regardless of VIX — "is the regime system earning its keep" |
+`runMatrix()` computes enrichment once per sim day, then runs N strategy passes against the same data. This makes testing 18 exit strategies nearly as fast as testing 1, since data fetching/enrichment is ~95% of runtime.
 
 ---
 
@@ -105,22 +120,25 @@ Each strategy is a plain config object defining:
 
 ```
 backtest.js                  # CLI entry point
-test-backtest.js             # 96 tests across all modules
+test-backtest.js             # 183 tests across 29 sections
+config/calibration.js        # Default + calibrated weights, signal edges
 config/constants.js          # ~490 stocks, sectors, position sizing tables
-config/strategies.js         # Strategy definitions (7 strategies — see table above)
+config/strategies.js         # Signal configs (7), exit configs (18), presets, matrix generator
 data/cache.js                # File-based JSON cache with TTL
 data/polygon.js              # Polygon API functions
-data/technicals.js           # Technical indicators + composite scoring (synced from APEX)
+data/technicals.js           # Raw technical indicators (RSI, SMA, MACD, structure, momentum, RS, ATR)
+data/signals.js              # 6 APEX entry signal evaluators (REV, MOM, QMO, SQZ, LDR, AVOID)
+data/scoring.js              # Composite scoring + enrichMarketData orchestration
 engine/data-manager.js       # Historical data fetcher + anti-look-ahead windowing
 engine/regime.js             # VIX-based regime determination
-engine/candidate-pool.js     # APEX candidate pool builder
-engine/entry-rules.js        # Deterministic entry logic + score→conviction mapping
-engine/exit-rules.js         # Deterministic exit logic (stops, targets, degradation)
-engine/engine.js             # Main simulation loop
-engine/results.js            # Metrics computation + output formatting
-portfolio/schema.js          # Portfolio creation
+engine/candidate-pool.js     # Signal-filtered candidate pool
+engine/entry-rules.js        # Signal quality → conviction → entry
+engine/exit-rules.js         # Configurable multi-strategy exits
+engine/engine.js             # Simulation loop + matrix mode
+engine/results.js            # Metrics + signal accuracy + matrix summary
+portfolio/schema.js          # Portfolio creation (supports unconstrained mode)
 portfolio/manager.js         # executeBuy(), executeSell(), position sizing
-dashboard/server.js          # Results dashboard (port 3000)
+dashboard/server.js          # Dashboard server (port 3000) — consistency, matrix, signal APIs
 dashboard/index.html         # Dashboard HTML
 dashboard/style.css          # Dashboard styles
 dashboard/js/app.js          # Dashboard client JS
@@ -132,12 +150,30 @@ results/                     # Backtest output JSONs
 ## Commands
 
 ```bash
-node backtest.js --strategy=baseline                     # Run single strategy
-node backtest.js --strategy=baseline --start=2025-06-01  # Custom date range
-node backtest.js --all                                   # Run all strategies + comparison
-node backtest.js --balance=100000                        # Custom starting balance
-npm test                                                 # Run 96 unit tests
-npm run dashboard                                        # Start results dashboard
+# Single signal + exit combo
+node backtest.js --signal=REV --exit=trail8
+
+# With weight selection
+node backtest.js --signal=REV --exit=trail8 --weights=default
+
+# Named preset
+node backtest.js --preset=rev-baseline
+
+# One signal, all exits (matrix)
+node backtest.js --signal=REV --matrix
+
+# Full matrix (all signals x all exits)
+node backtest.js --matrix
+
+# Custom date range and balance
+node backtest.js --signal=REV --matrix --start=2018-03-17 --balance=30000
+
+# Pure signal accuracy (unconstrained, $5K/trade, no caps)
+node backtest.js --signal=REV --matrix --unconstrained
+
+# Tests and dashboard
+npm test                                    # 183 unit tests
+npm run dashboard                           # Start dashboard on port 3000
 ```
 
 ---
@@ -151,25 +187,39 @@ npm run dashboard                                        # Start results dashboa
 | Regime Deployment | Bull: 90-100%, Bear: 50-70%, Choppy: 60-80% |
 | Hold Discipline | Min 3 trading days (unless -15% stop hit) |
 | Rebuy Cooldown | 5 trading days after selling a symbol |
-| Adaptive Deployment | Win rate < 45% in regime → reduce 17.5% |
 
 ---
 
 ## Data Sources
 
-- **Polygon API** — grouped daily bars (all stocks per date). Cached 30 days.
+- **Polygon API** — grouped daily bars (all stocks per date). Stocks-Advanced plan, no historical limit. Cached 30 days.
 - **Yahoo Finance** — historical VIX (^VIX chart endpoint). Cached 7 days.
 - **Env var required:** `POLYGON_API_KEY` in `.env`
 
 ---
 
-## Key Design Notes
+## Dashboard (http://192.168.0.248:3000)
 
-- **~190 trading days** for a 9-month backtest = ~270 Polygon API calls (with lookback). Cached after first run.
-- **SPY benchmark** — tracked automatically since SPY is in the universe
-- **Short interest + news** — excluded (not available historically). Scoring handles nulls gracefully.
-- **Date handling** — uses UTC (`getUTCDay()`, `setUTCDate()`) to avoid timezone issues on different machines.
+Hosted on Pi via PM2 (`forge-dashboard`).
+
+| Tab | Purpose |
+|---|---|
+| **Consistency** (primary) | Cross-timeframe table: each exit strategy's return/WR across 6mo, 1yr, 3yr, 5yr, 8yr. Green "ALL PROFIT" badge for durable strategies. |
+| **Matrix** | Heatmap for a single run (signal × exit), metric selector dropdown |
+| **Signal Accuracy** | Per-signal stats aggregated across runs, quality breakdown |
+| **All Results** | Every result file, clickable to detail view with equity curve and trade log |
+| **My Trades** | Live APEX trades from Pi portfolio.json |
 
 ---
 
-*FORGE Backtester v2.0 — Built March 2026*
+## Key Design Notes
+
+- **Date handling** — uses UTC (`getUTCDay()`, `setUTCDate()`) to avoid timezone issues.
+- **SPY benchmark** — tracked automatically since SPY is in the universe.
+- **Earnings gate for REV** — skipped in backtester (historical earnings dates not in Polygon grouped daily bars).
+- **DTC for SQZ** — unreliable historically (short interest not available). SQZ results have limited data.
+- **Matrix runtime** — ~18 strategies × 5 periods at $30K ≈ 15-20 min total (data cached after first run).
+
+---
+
+*FORGE Signal Backtester v3.0 — Built March 2026*
