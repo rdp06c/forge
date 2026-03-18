@@ -20,12 +20,6 @@ export const SIGNAL_CONFIGS = {
 // ═══════════════════════════════════════════════════
 
 export const EXIT_CONFIGS = {
-    // Fixed stops only (no target)
-    stop5:    { name: 'Stop -5%',   stop: -0.05, target: null, trailing: null, timeBased: null, degradation: null, holdMin: 3 },
-    stop8:    { name: 'Stop -8%',   stop: -0.08, target: null, trailing: null, timeBased: null, degradation: null, holdMin: 3 },
-    stop10:   { name: 'Stop -10%',  stop: -0.10, target: null, trailing: null, timeBased: null, degradation: null, holdMin: 3 },
-    stop15:   { name: 'Stop -15%',  stop: -0.15, target: null, trailing: null, timeBased: null, degradation: null, holdMin: 3 },
-
     // Fixed targets with -10% stop
     target10: { name: 'Target +10%', stop: -0.10, target: 0.10, trailing: null, timeBased: null, degradation: null, holdMin: 3 },
     target15: { name: 'Target +15%', stop: -0.10, target: 0.15, trailing: null, timeBased: null, degradation: null, holdMin: 3 },

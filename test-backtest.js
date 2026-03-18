@@ -250,7 +250,7 @@ section('Strategy Builder');
     assert(threw, 'Unknown signal throws');
 
     // Matrix generation
-    const small = generateMatrix({ signals: ['REV', 'MOM'], exits: ['trail8', 'stop10'], weights: ['calibrated'] });
+    const small = generateMatrix({ signals: ['REV', 'MOM'], exits: ['trail8', 'target10'], weights: ['calibrated'] });
     assert(small.length === 4, 'Small matrix: 2 signals × 2 exits × 1 weight = 4');
 
     const full = generateMatrix({ weights: ['calibrated'] });
@@ -526,6 +526,12 @@ section('Exit Strategy Configs');
     assert(EXIT_CONFIGS.degrade50.degradation === 0.50, 'degrade50 has 50% threshold');
     assert(EXIT_CONFIGS.trailATR.trailing === 'atr2x', 'trailATR uses 2x ATR');
     assert(EXIT_CONFIGS.target15_trail8.target === 0.15 && EXIT_CONFIGS.target15_trail8.trailing === 0.08, 'Combo: target + trailing');
+
+    // Stop-only strategies removed (no exit for winners = not a real strategy)
+    assert(!EXIT_CONFIGS.stop5, 'stop5 removed');
+    assert(!EXIT_CONFIGS.stop8, 'stop8 removed');
+    assert(!EXIT_CONFIGS.stop10, 'stop10 removed');
+    assert(!EXIT_CONFIGS.stop15, 'stop15 removed');
 }
 
 // ═══════════════════════════════════════════════════
