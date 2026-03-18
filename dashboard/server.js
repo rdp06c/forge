@@ -75,6 +75,87 @@ function handleComparison(res) {
     sendJSON(res, { results: details });
 }
 
+function handleMatrix(res) {
+    // Find and load the latest matrix_*.json file
+    if (!existsSync(RESULTS_DIR)) return sendJSON(res, { error: 'No results directory' }, 404);
+    const matrixFiles = readdirSync(RESULTS_DIR)
+        .filter(f => f.startsWith('matrix_') && f.endsWith('.json'))
+        .sort()
+        .reverse();
+    if (matrixFiles.length === 0) return sendJSON(res, { error: 'No matrix results found' }, 404);
+    const data = loadResult(matrixFiles[0]);
+    if (!data) return sendJSON(res, { error: 'Failed to load matrix' }, 500);
+    sendJSON(res, data);
+}
+
+function handleConsistency(res) {
+    // Build cross-timeframe consistency data from all result files
+    if (!existsSync(RESULTS_DIR)) return sendJSON(res, { strategies: {} });
+    const files = readdirSync(RESULTS_DIR)
+        .filter(f => f.endsWith('.json') && !f.startsWith('matrix_'));
+
+    const strategies = {};
+    for (const f of files) {
+        const data = loadResult(f);
+        if (!data || !data.metrics) continue;
+        const name = data.strategy;
+        if (!name) continue;
+
+        // Extract period label if present (e.g., REV_time8_calibrated_1yr)
+        const periodMatch = name.match(/_(6mo|1yr|3yr|5yr|8yr)$/);
+        const period = periodMatch ? periodMatch[1] : null;
+        const baseName = period ? name.replace('_' + period, '') : name;
+
+        // Derive time range from equity curve
+        const ec = data.metrics.equityCurve || [];
+        const startDate = ec[0]?.date || null;
+        const endDate = ec[ec.length - 1]?.date || null;
+        const days = ec.length;
+
+        // Infer period from days if not labeled
+        const periodLabel = period || (days > 1500 ? '8yr' : days > 1000 ? '5yr' : days > 500 ? '3yr' : days > 200 ? '1yr' : days > 100 ? '6mo' : 'short');
+
+        if (!strategies[baseName]) strategies[baseName] = { periods: {} };
+        strategies[baseName].periods[periodLabel] = {
+            totalReturn: data.metrics.totalReturn,
+            winRate: data.metrics.winRate,
+            sharpe: data.metrics.sharpe,
+            trades: data.metrics.totalTrades,
+            maxDrawdown: data.metrics.maxDrawdown,
+            profitFactor: data.metrics.profitFactor,
+            avgHoldDays: data.metrics.avgHoldDays,
+            startDate,
+            endDate,
+            signalAccuracy: data.metrics.signalAccuracy || null,
+        };
+    }
+
+    // Compute consistency scores
+    for (const [name, s] of Object.entries(strategies)) {
+        const periods = Object.values(s.periods);
+        const returns = periods.map(p => p.totalReturn);
+        s.periodsCount = periods.length;
+        s.profitableCount = returns.filter(r => r > 0).length;
+        s.allProfitable = s.profitableCount === s.periodsCount && s.periodsCount > 0;
+        s.avgReturn = returns.length > 0 ? returns.reduce((a, b) => a + b, 0) / returns.length : 0;
+    }
+
+    sendJSON(res, { strategies });
+}
+
+function handleSignal(res, signalCode) {
+    // Find all results for a given signal
+    if (!existsSync(RESULTS_DIR)) return sendJSON(res, { results: [] });
+    const files = readdirSync(RESULTS_DIR)
+        .filter(f => f.startsWith(signalCode + '_') && f.endsWith('.json') && !f.startsWith('matrix_'));
+    const results = files.map(f => {
+        const data = loadResult(f);
+        if (!data) return null;
+        return { filename: f, strategy: data.strategy, metrics: data.metrics };
+    }).filter(Boolean);
+    sendJSON(res, { signal: signalCode, results });
+}
+
 function handleMyTrades(res) {
     if (!existsSync(APEX_PORTFOLIO_PATH)) {
         return sendJSON(res, { error: 'APEX portfolio not found', path: APEX_PORTFOLIO_PATH }, 404);
@@ -173,7 +254,12 @@ const server = createServer((req, res) => {
     // API routes
     if (urlPath === '/api/results') return handleResults(res);
     if (urlPath === '/api/comparison') return handleComparison(res);
+    if (urlPath === '/api/matrix') return handleMatrix(res);
+    if (urlPath === '/api/consistency') return handleConsistency(res);
     if (urlPath === '/api/my-trades') return handleMyTrades(res);
+
+    const signalMatch = urlPath.match(/^\/api\/signal\/([A-Z]+)$/);
+    if (signalMatch) return handleSignal(res, signalMatch[1]);
 
     const resultMatch = urlPath.match(/^\/api\/result\/(.+\.json)$/);
     if (resultMatch) return handleResult(res, decodeURIComponent(resultMatch[1]));

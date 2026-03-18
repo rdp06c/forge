@@ -1,4 +1,5 @@
 // Metrics computation and output for backtest results
+// Extended with per-signal accuracy metrics and matrix summary
 import { writeFileSync, mkdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
@@ -9,16 +10,30 @@ const RESULTS_DIR = join(import.meta.dirname, '..', 'results');
  */
 export function computeResults(portfolio, dailySnapshots, initialBalance) {
     const closed = portfolio.closedTrades || [];
-    const finalValue = dailySnapshots.length > 0
-        ? dailySnapshots[dailySnapshots.length - 1].portfolioValue
-        : initialBalance;
+    const isUnconstrained = !!portfolio.unconstrained;
 
-    // Return metrics
-    const totalReturn = ((finalValue - initialBalance) / initialBalance) * 100;
+    // For unconstrained: compute return from total P&L vs total capital deployed
+    // (portfolio value is meaningless with infinite cash)
+    let totalReturn, annualizedReturn, finalValue;
     const tradingDays = dailySnapshots.length;
-    const annualizedReturn = tradingDays > 0
-        ? (Math.pow(finalValue / initialBalance, 252 / tradingDays) - 1) * 100
-        : 0;
+
+    if (isUnconstrained) {
+        const totalPL = closed.reduce((s, t) => s + (t.profitLoss || 0), 0);
+        const totalDeployed = closed.reduce((s, t) => s + (t.buyPrice * t.shares), 0);
+        finalValue = initialBalance + totalPL;
+        totalReturn = totalDeployed > 0 ? (totalPL / totalDeployed) * 100 : 0;
+        annualizedReturn = tradingDays > 0 && totalDeployed > 0
+            ? (Math.pow(1 + totalPL / totalDeployed, 252 / tradingDays) - 1) * 100
+            : 0;
+    } else {
+        finalValue = dailySnapshots.length > 0
+            ? dailySnapshots[dailySnapshots.length - 1].portfolioValue
+            : initialBalance;
+        totalReturn = ((finalValue - initialBalance) / initialBalance) * 100;
+        annualizedReturn = tradingDays > 0
+            ? (Math.pow(finalValue / initialBalance, 252 / tradingDays) - 1) * 100
+            : 0;
+    }
 
     // Win/Loss metrics
     const winners = closed.filter(t => t.profitLoss > 0);
@@ -113,6 +128,9 @@ export function computeResults(portfolio, dailySnapshots, initialBalance) {
         }
     }
 
+    // Signal accuracy metrics
+    const signalAccuracy = computeSignalAccuracy(closed);
+
     // Equity curve
     const equityCurve = dailySnapshots.map(s => ({ date: s.date, value: round2(s.portfolioValue) }));
 
@@ -134,7 +152,159 @@ export function computeResults(portfolio, dailySnapshots, initialBalance) {
         byRegime,
         exitReasons,
         bySector,
+        signalAccuracy,
         equityCurve,
+    };
+}
+
+/**
+ * Compute per-signal accuracy metrics from closed trades.
+ */
+function computeSignalAccuracy(closedTrades) {
+    const bySignal = {};
+    const byQuality = {};
+
+    for (const t of closedTrades) {
+        const sig = t.signalCode || 'NOSIGNAL';
+        const quality = t.signalQuality || 'none';
+        const isWin = t.profitLoss > 0;
+
+        // Per-signal stats
+        if (!bySignal[sig]) bySignal[sig] = { trades: 0, wins: 0, losses: 0, totalReturn: 0, totalWinReturn: 0, totalLossReturn: 0, grossProfit: 0, grossLoss: 0 };
+        const s = bySignal[sig];
+        s.trades++;
+        s.totalReturn += t.returnPercent || 0;
+        if (isWin) { s.wins++; s.totalWinReturn += t.returnPercent || 0; s.grossProfit += t.profitLoss; }
+        else { s.losses++; s.totalLossReturn += t.returnPercent || 0; s.grossLoss += Math.abs(t.profitLoss); }
+
+        // Per-quality stats (nested under signal)
+        const qKey = `${sig}_${quality}`;
+        if (!byQuality[qKey]) byQuality[qKey] = { signal: sig, quality, trades: 0, wins: 0, totalReturn: 0 };
+        const q = byQuality[qKey];
+        q.trades++;
+        q.totalReturn += t.returnPercent || 0;
+        if (isWin) q.wins++;
+    }
+
+    // Compute derived metrics
+    const result = {};
+    for (const [sig, s] of Object.entries(bySignal)) {
+        const winRate = s.trades > 0 ? (s.wins / s.trades) * 100 : 0;
+        const avgReturn = s.trades > 0 ? s.totalReturn / s.trades : 0;
+        const avgWinReturn = s.wins > 0 ? s.totalWinReturn / s.wins : 0;
+        const avgLossReturn = s.losses > 0 ? s.totalLossReturn / s.losses : 0;
+        const profitFactor = s.grossLoss > 0 ? s.grossProfit / s.grossLoss : (s.grossProfit > 0 ? Infinity : 0);
+
+        // Quality breakdown
+        const qualityBreakdown = {};
+        for (const q of ['full', 'strong', 'partial', 'none']) {
+            const qData = byQuality[`${sig}_${q}`];
+            if (qData && qData.trades > 0) {
+                qualityBreakdown[q] = {
+                    trades: qData.trades,
+                    wins: qData.wins,
+                    winRate: round2((qData.wins / qData.trades) * 100),
+                    avgReturn: round2(qData.totalReturn / qData.trades),
+                };
+            }
+        }
+
+        // Check if quality is monotonic (full > strong > partial)
+        const fullWR = qualityBreakdown.full?.winRate || 0;
+        const strongWR = qualityBreakdown.strong?.winRate || 0;
+        const partialWR = qualityBreakdown.partial?.winRate || 0;
+        const qualityMatters = fullWR > strongWR && strongWR > partialWR && fullWR > 0;
+
+        result[sig] = {
+            trades: s.trades,
+            wins: s.wins,
+            losses: s.losses,
+            winRate: round2(winRate),
+            avgReturn: round2(avgReturn),
+            avgWinReturn: round2(avgWinReturn),
+            avgLossReturn: round2(avgLossReturn),
+            profitFactor: round2(profitFactor),
+            byQuality: qualityBreakdown,
+            qualityMatters,
+        };
+    }
+
+    return result;
+}
+
+/**
+ * Compute matrix summary — comparison grid across all strategy results.
+ * Also computes vsBaseline (alpha vs NOSIGNAL) for each signal.
+ */
+export function computeMatrixSummary(allResults, startDate, endDate) {
+    const grid = {};
+
+    // Find NOSIGNAL baselines for alpha computation
+    const baselines = {};
+    for (const r of allResults) {
+        const parts = r.strategy.split('_');
+        if (parts[0] === 'NOSIGNAL') {
+            const exitCode = parts.slice(1, -1).join('_'); // Handle multi-part exit codes
+            const weightsName = parts[parts.length - 1];
+            baselines[`${exitCode}_${weightsName}`] = r.metrics;
+        }
+    }
+
+    for (const r of allResults) {
+        const parts = r.strategy.split('_');
+        const signalCode = parts[0];
+        const weightsName = parts[parts.length - 1];
+        const exitCode = parts.slice(1, -1).join('_');
+
+        if (!grid[signalCode]) grid[signalCode] = {};
+        if (!grid[signalCode][exitCode]) grid[signalCode][exitCode] = {};
+
+        const baseline = baselines[`${exitCode}_${weightsName}`];
+        const vsBaseline = baseline ? {
+            winRateDelta: round2(r.metrics.winRate - baseline.winRate),
+            returnDelta: round2(r.metrics.totalReturn - baseline.totalReturn),
+            sharpeDelta: (r.metrics.sharpe != null && baseline.sharpe != null)
+                ? round2(r.metrics.sharpe - baseline.sharpe) : null,
+        } : null;
+
+        grid[signalCode][exitCode][weightsName] = {
+            totalReturn: r.metrics.totalReturn,
+            winRate: r.metrics.winRate,
+            sharpe: r.metrics.sharpe,
+            trades: r.metrics.totalTrades,
+            maxDrawdown: r.metrics.maxDrawdown,
+            profitFactor: r.metrics.profitFactor,
+            avgHoldDays: r.metrics.avgHoldDays,
+            vsBaseline,
+        };
+    }
+
+    // Find best combos
+    let bestByReturn = null, bestByWinRate = null, bestBySharpe = null;
+    for (const r of allResults) {
+        const parts = r.strategy.split('_');
+        const sig = parts[0];
+        const exit = parts.slice(1, -1).join('_');
+        const w = parts[parts.length - 1];
+
+        if (!bestByReturn || r.metrics.totalReturn > bestByReturn.value) {
+            bestByReturn = { signal: sig, exit, weights: w, value: r.metrics.totalReturn };
+        }
+        if (r.metrics.totalTrades >= 5 && (!bestByWinRate || r.metrics.winRate > bestByWinRate.value)) {
+            bestByWinRate = { signal: sig, exit, weights: w, value: r.metrics.winRate };
+        }
+        if (r.metrics.sharpe != null && (!bestBySharpe || r.metrics.sharpe > bestBySharpe.value)) {
+            bestBySharpe = { signal: sig, exit, weights: w, value: r.metrics.sharpe };
+        }
+    }
+
+    return {
+        type: 'matrix',
+        startDate,
+        endDate,
+        totalCombinations: allResults.length,
+        grid,
+        best: { byReturn: bestByReturn, byWinRate: bestByWinRate, bySharpe: bestBySharpe },
     };
 }
 
@@ -164,6 +334,16 @@ export function printResults(result) {
     console.log(`Profit Factor: ${m.profitFactor}`);
     console.log(`Avg Hold:      ${m.avgHoldDays} days`);
 
+    // Signal accuracy
+    if (m.signalAccuracy && Object.keys(m.signalAccuracy).length > 0) {
+        console.log('');
+        console.log('Signal Accuracy:');
+        for (const [sig, data] of Object.entries(m.signalAccuracy)) {
+            console.log(`  ${sig.padEnd(10)}: ${data.trades} trades, ${data.winRate}% win rate, avg ${data.avgReturn >= 0 ? '+' : ''}${data.avgReturn}%, PF ${data.profitFactor}`);
+            if (data.qualityMatters) console.log(`             Quality matters: full>${data.byQuality?.strong?.winRate || '?'}%>partial`);
+        }
+    }
+
     if (Object.keys(m.byRegime).length > 0) {
         console.log('');
         console.log('Regime Performance:');
@@ -185,30 +365,27 @@ export function printResults(result) {
 }
 
 /**
- * Print comparison table for multiple strategy results.
+ * Print matrix comparison summary.
  */
-export function printComparison(allResults) {
+export function printMatrixSummary(summary) {
     console.log('\n═══════════════════════════════════════════════════');
-    console.log('STRATEGY COMPARISON');
+    console.log('MATRIX SUMMARY');
+    console.log(`${summary.totalCombinations} combinations tested`);
     console.log('═══════════════════════════════════════════════════');
-    console.log(`${'Strategy'.padEnd(20)} ${'Return'.padStart(8)} ${'Sharpe'.padStart(8)} ${'Win%'.padStart(6)} ${'Trades'.padStart(7)} ${'MaxDD'.padStart(7)} ${'PF'.padStart(6)}`);
-    console.log('─'.repeat(62));
-    for (const r of allResults) {
-        const m = r.metrics;
-        console.log(
-            `${(r.strategy || '?').padEnd(20)} ` +
-            `${(m.totalReturn >= 0 ? '+' : '') + m.totalReturn + '%'}`.padStart(8) + ' ' +
-            `${m.sharpe ?? 'N/A'}`.padStart(8) + ' ' +
-            `${m.winRate}%`.padStart(6) + ' ' +
-            `${m.totalTrades}`.padStart(7) + ' ' +
-            `${'-' + m.maxDrawdown + '%'}`.padStart(7) + ' ' +
-            `${m.profitFactor}`.padStart(6)
-        );
+
+    if (summary.best.byReturn) {
+        const b = summary.best.byReturn;
+        console.log(`Best Return:   ${b.signal}/${b.exit} (${b.weights}): ${b.value >= 0 ? '+' : ''}${b.value}%`);
     }
-    if (allResults.length > 0 && allResults[0].metrics.spyReturn !== null) {
-        console.log('─'.repeat(62));
-        console.log(`${'SPY (buy & hold)'.padEnd(20)} ${(allResults[0].metrics.spyReturn >= 0 ? '+' : '') + allResults[0].metrics.spyReturn + '%'}`.padStart(8));
+    if (summary.best.byWinRate) {
+        const b = summary.best.byWinRate;
+        console.log(`Best Win Rate: ${b.signal}/${b.exit} (${b.weights}): ${b.value}%`);
     }
+    if (summary.best.bySharpe) {
+        const b = summary.best.bySharpe;
+        console.log(`Best Sharpe:   ${b.signal}/${b.exit} (${b.weights}): ${b.value}`);
+    }
+
     console.log('═══════════════════════════════════════════════════');
 }
 
@@ -221,6 +398,17 @@ export function saveResults(result, strategyName, startDate, endDate) {
     const filePath = join(RESULTS_DIR, filename);
     writeFileSync(filePath, JSON.stringify(result, null, 2));
     console.log(`Results saved: ${filePath}`);
+}
+
+/**
+ * Save matrix summary to results/ directory.
+ */
+export function saveMatrixResults(summary) {
+    if (!existsSync(RESULTS_DIR)) mkdirSync(RESULTS_DIR, { recursive: true });
+    const filename = `matrix_${summary.startDate}_${summary.endDate}.json`;
+    const filePath = join(RESULTS_DIR, filename);
+    writeFileSync(filePath, JSON.stringify(summary, null, 2));
+    console.log(`Matrix results saved: ${filePath}`);
 }
 
 function round2(v) {

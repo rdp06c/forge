@@ -1,14 +1,17 @@
 #!/usr/bin/env node
-// Tests for backtester engine modules
+// Tests for FORGE Signal Backtester v3.0
 import { determineRegime } from './engine/regime.js';
-import { scoreToConviction } from './engine/entry-rules.js';
-import { buildCandidatePool } from './engine/candidate-pool.js';
-import { computeResults } from './engine/results.js';
+import { deriveConviction, processEntries } from './engine/entry-rules.js';
+import { buildSignalPool } from './engine/candidate-pool.js';
+import { computeResults, computeMatrixSummary } from './engine/results.js';
 import { calculatePositionSize, countTradingDays, addTradingDays, executeBuy, executeSell } from './portfolio/manager.js';
 import { createBacktestPortfolio } from './portfolio/schema.js';
-import { calculateCompositeScore, calculateRSI, calculateSMA, calculateMACD, detectStructure, calculateSMACrossover, DEFAULT_WEIGHTS } from './data/technicals.js';
+import { calculateRSI, calculateSMA, calculateMACD, detectStructure, calculateSMACrossover, calculate5DayMomentum, calculateATR } from './data/technicals.js';
+import { calculateCompositeScore } from './data/scoring.js';
+import { evaluateAllSignals, meetsQuality, toSignalCandidate, ENTRY_SIGNAL_PATTERNS } from './data/signals.js';
+import { DEFAULT_WEIGHTS, CALIBRATED_WEIGHTS, SIGNAL_CALIBRATION_EDGES, getWeights } from './config/calibration.js';
+import { SIGNAL_CONFIGS, EXIT_CONFIGS, CONVICTION_MAP, NOSIGNAL_CONVICTION_MAP, UNCONSTRAINED_ENTRY_RULES, buildStrategy, generateMatrix } from './config/strategies.js';
 import { DataManager, generateWeekdays, getWeekdaysBefore } from './engine/data-manager.js';
-import { STRATEGIES } from './config/strategies.js';
 
 let passed = 0, failed = 0;
 
@@ -29,475 +32,664 @@ function section(name) {
 // 1. Regime Detection
 // ═══════════════════════════════════════════════════
 section('Regime Detection');
+{
+    // Bull requires bullSignals >= 2: VIX < 15 (+1) and VIX dropping > -10% (+1)
+    const bull = determineRegime({ level: 14, changePercent: -12 }, {}, {});
+    assert(bull.regime === 'bull', 'VIX 14 dropping 12% → bull');
 
-const bearResult = determineRegime({ level: 35, changePercent: 12 }, null, null);
-assert(bearResult.regime === 'bear', 'VIX 35 + spiking → bear');
+    const bear = determineRegime({ level: 32, changePercent: 5 }, {}, {});
+    assert(bear.regime === 'bear', 'VIX 32 → bear');
 
-const bullResult = determineRegime({ level: 14, changePercent: -6 }, null, null);
-assert(bullResult.regime !== 'bear', 'VIX 14 + falling → not bear');
+    const choppy = determineRegime({ level: 22, changePercent: 2 }, {}, {});
+    assert(choppy.regime === 'choppy', 'VIX 22 → choppy');
 
-const choppyResult = determineRegime({ level: 22, changePercent: 2 }, null, null);
-assert(choppyResult.regime === 'choppy', 'VIX 22 + stable → choppy');
-
-const nullVixResult = determineRegime(null, null, null);
-assert(nullVixResult.regime === 'choppy', 'null VIX → choppy (default)');
-
-// ═══════════════════════════════════════════════════
-// 2. Score → Conviction Mapping
-// ═══════════════════════════════════════════════════
-section('Score → Conviction Mapping');
-
-const baseline = STRATEGIES.baseline;
-assert(scoreToConviction(20, baseline.convictionMap) === 10, 'Score 20 → conviction 10');
-assert(scoreToConviction(16, baseline.convictionMap) === 9, 'Score 16 → conviction 9');
-assert(scoreToConviction(12, baseline.convictionMap) === 8, 'Score 12 → conviction 8');
-assert(scoreToConviction(9, baseline.convictionMap) === 7, 'Score 9 → conviction 7');
-assert(scoreToConviction(6, baseline.convictionMap) === 6, 'Score 6 → conviction 6');
-assert(scoreToConviction(3, baseline.convictionMap) === 0, 'Score 3 → 0 (below floor)');
-assert(scoreToConviction(-5, baseline.convictionMap) === 0, 'Negative score → 0');
-
-// ═══════════════════════════════════════════════════
-// 3. Position Sizing
-// ═══════════════════════════════════════════════════
-section('Position Sizing');
-
-const testPortfolio = createBacktestPortfolio(50000, 'test');
-const shares7 = calculatePositionSize(testPortfolio, 7, 'bull', 100, {});
-assert(shares7 > 0, 'Conviction 7 bull → positive shares');
-assert(shares7 <= 100, 'Conviction 7 bull → reasonable shares (≤100 at $100)');
-
-const shares5 = calculatePositionSize(testPortfolio, 5, 'bull', 100, {});
-assert(shares5 === 0, 'Conviction 5 → 0 shares (below minimum)');
-
-const shares10 = calculatePositionSize(testPortfolio, 10, 'bull', 100, {});
-assert(shares10 > shares7, 'Conviction 10 → more shares than conviction 7');
-
-// Regime deployment is a total portfolio cap enforced at processEntries level.
-// Per-position sizing is conviction-driven. At conviction 10 (35%), 17500 < bear cap (30000),
-// so individual position size is the same regardless of regime.
-const sharesBearHigh = calculatePositionSize(testPortfolio, 10, 'bear', 100, {});
-const sharesBullHigh = calculatePositionSize(testPortfolio, 10, 'bull', 100, {});
-assert(sharesBearHigh === sharesBullHigh, 'Same per-position size — regime cap is portfolio-level');
-
-// ═══════════════════════════════════════════════════
-// 4. Trading Day Calculations
-// ═══════════════════════════════════════════════════
-section('Trading Day Calculations');
-
-const mon = new Date('2026-03-02'); // Monday
-const fri = new Date('2026-03-06'); // Friday
-assert(countTradingDays(mon, fri) === 4, 'Mon→Fri = 4 trading days');
-
-const friToMon = countTradingDays(new Date('2026-03-06'), new Date('2026-03-09'));
-assert(friToMon === 1, 'Fri→Mon = 1 trading day (skips weekend)');
-
-const added = addTradingDays(new Date('2026-03-02'), 5);
-assert(added.getDay() !== 0 && added.getDay() !== 6, 'addTradingDays result is a weekday');
-
-// ═══════════════════════════════════════════════════
-// 5. Buy/Sell with simDate
-// ═══════════════════════════════════════════════════
-section('Buy/Sell with simDate');
-
-const buyPortfolio = createBacktestPortfolio(50000, 'test');
-const buySuccess = executeBuy(buyPortfolio, {
-    symbol: 'AAPL', shares: 10, price: 150,
-    conviction: 8, reasoning: 'Test buy',
-    marketData: { AAPL: { price: 150, momentum: { score: 7 } } },
-    vix: { level: 20 },
-    agentName: 'Test',
-    simDate: '2026-01-15',
-});
-assert(buySuccess === true, 'executeBuy with simDate succeeds');
-assert(buyPortfolio.cash === 48500, 'Cash reduced by 10 * $150');
-assert(buyPortfolio.holdings.AAPL === 10, 'Holdings updated');
-assert(buyPortfolio.transactions[0].timestamp.startsWith('2026-01-15'), 'Transaction timestamp uses simDate');
-
-// Sell after 5 trading days
-const sellSuccess = executeSell(buyPortfolio, {
-    symbol: 'AAPL', shares: 10, price: 160,
-    reasoning: 'Test sell', exitReason: 'profit_target',
-    marketData: {}, agentName: 'Test',
-    simDate: '2026-01-22',
-});
-assert(sellSuccess === true, 'executeSell with simDate succeeds');
-assert(buyPortfolio.cash === 50100, 'Cash = 48500 + 1600');
-assert(buyPortfolio.closedTrades.length === 1, 'Closed trade recorded');
-assert(buyPortfolio.closedTrades[0].returnPercent > 0, 'Positive return recorded');
-assert(buyPortfolio.closedTrades[0].holdTimeDays > 0, 'Hold time in days recorded');
-
-// Hold discipline: sell on day 1 should be blocked (unless stop)
-const holdPortfolio = createBacktestPortfolio(50000, 'test');
-executeBuy(holdPortfolio, {
-    symbol: 'MSFT', shares: 5, price: 400,
-    conviction: 8, reasoning: 'Test', marketData: {},
-    agentName: 'Test', simDate: '2026-02-02',
-});
-const earlyBadSell = executeSell(holdPortfolio, {
-    symbol: 'MSFT', shares: 5, price: 395,
-    reasoning: 'Too early', exitReason: 'score_degradation',
-    marketData: {}, agentName: 'Test',
-    simDate: '2026-02-03', // next day
-});
-assert(earlyBadSell === false, 'Hold discipline blocks day-1 sell at -1.25%');
-
-// But hard stop (-15%) overrides hold discipline
-const earlyStopSell = executeSell(holdPortfolio, {
-    symbol: 'MSFT', shares: 5, price: 335,
-    reasoning: 'Stop loss', exitReason: 'stop_loss',
-    marketData: {}, agentName: 'Test',
-    simDate: '2026-02-03',
-});
-assert(earlyStopSell === true, 'Hard stop (-16.25%) overrides hold discipline');
-
-// Rebuy cooldown
-const rebuyCooldown = executeBuy(holdPortfolio, {
-    symbol: 'MSFT', shares: 5, price: 330,
-    conviction: 8, reasoning: 'Rebuy attempt',
-    marketData: {}, agentName: 'Test',
-    simDate: '2026-02-04', // next day after sell
-});
-assert(rebuyCooldown === false, 'Rebuy cooldown blocks immediate rebuy');
-
-// ═══════════════════════════════════════════════════
-// 6. Composite Score (synced with APEX)
-// ═══════════════════════════════════════════════════
-section('Composite Score');
-
-const scoreResult = calculateCompositeScore({
-    momentumScore: 7, rsNormalized: 6,
-    sectorFlow: 'inflow', structureScore: 2,
-    isAccelerating: true, upDays: 4, totalDays: 4,
-    todayChange: 2, totalReturn5d: 3,
-    rsi: 55, macdCrossover: 'bullish',
-    daysToCover: 0, volumeTrend: 1.1,
-    fvg: 'none', sma20: 100, currentPrice: 101,
-    smaCrossover: { crossover: 'none' },
-});
-assert(typeof scoreResult === 'object', 'Score returns { total, breakdown }');
-assert(typeof scoreResult.total === 'number', 'Score total is a number');
-assert(scoreResult.total > 0, 'Bullish setup has positive score');
-assert(scoreResult.breakdown.momentumContrib === 7 * 0.6, 'Momentum contrib = 7 * 0.6');
-assert(scoreResult.breakdown.structureBonus === 2 * 1.25, 'Structure bonus = 2 * 1.25');
-assert(scoreResult.breakdown.declinePenalty === 0, 'Decline penalty removed');
-assert(scoreResult.breakdown.entryMultiplier !== undefined, 'Entry multiplier present');
-
-// Extension penalty
-const extendedScore = calculateCompositeScore({
-    momentumScore: 9.5, rsNormalized: 9, sectorFlow: 'neutral',
-    structureScore: 1, isAccelerating: true, upDays: 4, totalDays: 4,
-    todayChange: 1, totalReturn5d: 10, rsi: 75, macdCrossover: 'bullish',
-    daysToCover: 0, volumeTrend: 1, fvg: 'none',
-    sma20: null, currentPrice: null, smaCrossover: null,
-});
-assert(extendedScore.breakdown.extensionPenalty < 0, 'Extended stock gets extension penalty');
-assert(extendedScore.breakdown.entryMultiplier < 1, 'Extended stock gets entry multiplier < 1');
-
-// SMA proximity bonus
-const nearSmaScore = calculateCompositeScore({
-    momentumScore: 5, rsNormalized: 5, sectorFlow: 'neutral',
-    structureScore: 1, isAccelerating: false, upDays: 2, totalDays: 4,
-    todayChange: 0, totalReturn5d: -1, rsi: 45, macdCrossover: 'none',
-    daysToCover: 0, volumeTrend: 1, fvg: 'none',
-    sma20: 100, currentPrice: 101, smaCrossover: null,
-});
-assert(nearSmaScore.breakdown.smaProximityBonus === 2.0, 'Near SMA20 with bullish structure gets +2.0');
-
-// ═══════════════════════════════════════════════════
-// 7. Technical Indicators
-// ═══════════════════════════════════════════════════
-section('Technical Indicators');
-
-// Generate 30 bars for testing
-const testBars = [];
-for (let i = 0; i < 30; i++) {
-    const base = 100 + i * 0.5 + (Math.sin(i * 0.5) * 3);
-    testBars.push({ o: base - 0.5, h: base + 1, l: base - 1, c: base, v: 1000000, t: Date.now() - (30 - i) * 86400000 });
+    const nullVix = determineRegime(null, {}, {});
+    assert(nullVix.regime === 'choppy', 'null VIX → choppy');
 }
 
-const rsi = calculateRSI(testBars);
-assert(rsi !== null, 'RSI computed from 30 bars');
-assert(rsi >= 0 && rsi <= 100, 'RSI in 0-100 range');
+// ═══════════════════════════════════════════════════
+// 2. Calibration Config
+// ═══════════════════════════════════════════════════
+section('Calibration Config');
+{
+    assert(DEFAULT_WEIGHTS.momentumMultiplier === 0.6, 'Default momentum multiplier = 0.6');
+    assert(CALIBRATED_WEIGHTS.momentumMultiplier === 0.45, 'Calibrated momentum multiplier = 0.45');
+    assert(CALIBRATED_WEIGHTS.structureMultiplier === 1.5, 'Calibrated structure multiplier = 1.5');
+    assert(CALIBRATED_WEIGHTS.accelBonus === 0, 'Calibrated accel bonus = 0 (zeroed)');
+    assert(CALIBRATED_WEIGHTS.consistencyBonus === 0, 'Calibrated consistency bonus = 0 (zeroed)');
+    assert(getWeights('default') === DEFAULT_WEIGHTS, 'getWeights default');
+    assert(getWeights('calibrated') === CALIBRATED_WEIGHTS, 'getWeights calibrated');
 
-const sma = calculateSMA(testBars, 20);
-assert(sma !== null, 'SMA20 computed from 30 bars');
-assert(sma > 0, 'SMA20 is positive');
-
-const macd = calculateMACD(testBars);
-// 30 bars is < 35 so MACD should be null
-assert(macd === null, 'MACD null with < 35 bars');
-
-// 40 bars for MACD
-const testBars40 = [];
-for (let i = 0; i < 40; i++) {
-    const base = 100 + i * 0.3;
-    testBars40.push({ o: base, h: base + 1, l: base - 1, c: base, v: 1000000, t: Date.now() - (40 - i) * 86400000 });
+    assert(SIGNAL_CALIBRATION_EDGES.REV.winRateEdge === 0.19, 'REV edge = +19pp');
+    assert(SIGNAL_CALIBRATION_EDGES.MOM.winRateEdge < 0, 'MOM edge negative');
+    assert(SIGNAL_CALIBRATION_EDGES.AVOID.winRateEdge < 0, 'AVOID edge negative');
 }
-const macd40 = calculateMACD(testBars40);
-assert(macd40 !== null, 'MACD computed from 40 bars');
-assert(typeof macd40.crossover === 'string', 'MACD has crossover signal');
 
-// Structure detection
-const structure = detectStructure(testBars);
-assert(structure.structure !== 'unknown', 'Structure detected from 30 bars');
-assert(typeof structure.structureScore === 'number', 'Structure score is a number');
-
-// SMA crossover needs 52 bars
-const smaCrossover = calculateSMACrossover(testBars);
-assert(smaCrossover === null, 'SMA crossover null with < 52 bars');
-
-const testBars55 = [];
-for (let i = 0; i < 55; i++) {
-    const base = 100 + i * 0.2;
-    testBars55.push({ o: base, h: base + 1, l: base - 1, c: base, v: 1000000, t: Date.now() - (55 - i) * 86400000 });
+// ═══════════════════════════════════════════════════
+// 3. Signal Quality
+// ═══════════════════════════════════════════════════
+section('Signal Quality');
+{
+    assert(meetsQuality('full', 'partial') === true, 'full meets partial');
+    assert(meetsQuality('full', 'strong') === true, 'full meets strong');
+    assert(meetsQuality('full', 'full') === true, 'full meets full');
+    assert(meetsQuality('strong', 'full') === false, 'strong does not meet full');
+    assert(meetsQuality('partial', 'strong') === false, 'partial does not meet strong');
+    assert(meetsQuality(null, 'partial') === false, 'null does not meet partial');
+    assert(meetsQuality('strong', null) === false, 'strong does not meet null');
 }
-const smaCross55 = calculateSMACrossover(testBars55);
-assert(smaCross55 !== null, 'SMA crossover computed from 55 bars');
-assert(typeof smaCross55.crossover === 'string', 'SMA crossover has signal');
 
 // ═══════════════════════════════════════════════════
-// 8. Results Computation
+// 4. Signal Evaluation — REV
 // ═══════════════════════════════════════════════════
-section('Results Computation');
+section('Signal Evaluation — REV');
+{
+    // Full match: all 4 criteria
+    const fullCandidate = {
+        macdCrossover: 'bullish', rsi: 35, structure: 'bullish',
+        return5d: -4, momentum: 5, rs: 50, volumeRatio: 1, dayChange: 0,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const fullResult = evaluateAllSignals(fullCandidate);
+    assert(fullResult.REV.quality === 'full', 'REV full match (4/4 criteria)');
+    assert(fullResult.bestSignal === 'REV', 'REV is best signal');
 
-const mockPortfolio = createBacktestPortfolio(50000, 'test');
-mockPortfolio.closedTrades = [
-    { profitLoss: 500, returnPercent: 10, holdTimeDays: 5, exitReason: 'profit_target', entryRegime: 'bull', sector: 'Technology' },
-    { profitLoss: -200, returnPercent: -4, holdTimeDays: 3, exitReason: 'stop_loss', entryRegime: 'bull', sector: 'Technology' },
-    { profitLoss: 300, returnPercent: 6, holdTimeDays: 7, exitReason: 'profit_target', entryRegime: 'choppy', sector: 'Healthcare' },
-];
+    // Strong match: 3/4 criteria (missing pullback)
+    const strongCandidate = {
+        macdCrossover: 'bullish', rsi: 35, structure: 'bullish',
+        return5d: 1, momentum: 5, rs: 50, volumeRatio: 1, dayChange: 0,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const strongResult = evaluateAllSignals(strongCandidate);
+    assert(strongResult.REV.quality === 'strong', 'REV strong match (3/4)');
 
-const mockSnapshots = [
-    { date: '2026-01-02', portfolioValue: 50000, spyPrice: 500 },
-    { date: '2026-01-03', portfolioValue: 50200, spyPrice: 502 },
-    { date: '2026-01-06', portfolioValue: 49800, spyPrice: 498 },
-    { date: '2026-01-07', portfolioValue: 50600, spyPrice: 505 },
-];
+    // Partial match: 2/4 with required field
+    const partialCandidate = {
+        macdCrossover: 'none', macdHistogram: 0.5, rsi: 35, structure: 'ranging',
+        return5d: -3, momentum: 5, rs: 50, volumeRatio: 1, dayChange: 0,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const partialResult = evaluateAllSignals(partialCandidate);
+    assert(partialResult.REV.quality === 'partial', 'REV partial match (2/4 with required)');
 
-const metrics = computeResults(mockPortfolio, mockSnapshots, 50000);
-assert(metrics.totalReturn === 1.2, 'Total return: (50600-50000)/50000 = 1.2%');
-assert(metrics.totalTrades === 3, '3 closed trades');
-assert(metrics.winRate === 66.67, 'Win rate: 2/3 = 66.67%');
-assert(metrics.avgWinner === 8, 'Avg winner: (10+6)/2 = 8%');
-assert(metrics.avgLoser === -4, 'Avg loser: -4%');
-assert(metrics.profitFactor > 0, 'Profit factor > 0');
-assert(metrics.maxDrawdown > 0, 'Max drawdown > 0');
-assert(metrics.spyReturn === 1, 'SPY return: (505-500)/500 = 1%');
-assert(metrics.byRegime.bull, 'Bull regime stats present');
-assert(metrics.exitReasons.profit_target === 2, '2 profit target exits');
-assert(metrics.exitReasons.stop_loss === 1, '1 stop loss exit');
+    // No match: only 1 criterion
+    const noMatchCandidate = {
+        macdCrossover: 'none', macdHistogram: 0.5, rsi: 55, structure: 'bearish',
+        return5d: 5, momentum: 5, rs: 50, volumeRatio: 1, dayChange: 0,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const noMatchResult = evaluateAllSignals(noMatchCandidate);
+    assert(noMatchResult.REV.quality === null, 'REV no match (1/4)');
+
+    // REV in bear regime: MACD histogram<=0 not enough
+    const bearCandidate = {
+        macdCrossover: 'none', macdHistogram: -0.5, rsi: 35, structure: 'bullish',
+        return5d: -4, momentum: 5, rs: 50, volumeRatio: 1, dayChange: 0,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bearish'
+    };
+    const bearResult = evaluateAllSignals(bearCandidate);
+    assert(bearResult.REV.criteria.macd === false, 'REV MACD histogram not enough in bear regime');
+}
 
 // ═══════════════════════════════════════════════════
-// 9. Date Utilities
+// 5. Signal Evaluation — MOM
 // ═══════════════════════════════════════════════════
-section('Date Utilities');
+section('Signal Evaluation — MOM');
+{
+    const momCandidate = {
+        macdCrossover: 'none', rsi: 45, structure: 'bullish',
+        return5d: 2, momentum: 6, rs: 60, volumeRatio: 1, dayChange: 1,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const momResult = evaluateAllSignals(momCandidate);
+    assert(momResult.MOM.quality === 'full', 'MOM full match (4/4)');
 
-const weekdays = generateWeekdays('2026-03-02', '2026-03-06');
-assert(weekdays.length === 5, 'Mon-Fri = 5 weekdays');
+    // MOM needs 3/4
+    const momPartialCandidate = {
+        macdCrossover: 'none', rsi: 45, structure: 'bullish',
+        return5d: 2, momentum: 6, rs: 40, volumeRatio: 1, dayChange: 1,
+        sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const momPartialResult = evaluateAllSignals(momPartialCandidate);
+    assert(momPartialResult.MOM.quality === 'strong', 'MOM strong match (3/4)');
+}
 
-const weekdaysWithWeekend = generateWeekdays('2026-03-06', '2026-03-09');
-assert(weekdaysWithWeekend.length === 2, 'Fri-Mon = 2 weekdays (Fri + Mon)');
+// ═══════════════════════════════════════════════════
+// 6. Signal Evaluation — AVOID (Anti-Pattern)
+// ═══════════════════════════════════════════════════
+section('Signal Evaluation — AVOID');
+{
+    const avoidCandidate = {
+        macdCrossover: 'bullish', rsi: 75, structure: 'bullish',
+        return5d: 3, momentum: 9.5, rs: 80, volumeRatio: 0.7, dayChange: 6,
+        sectorFlow: 'inflow', daysToCover: 0, _regime: 'bull'
+    };
+    const avoidResult = evaluateAllSignals(avoidCandidate);
+    assert(avoidResult.AVOID.quality !== null, 'AVOID fires on exhausted runner');
+    assert(avoidResult.antiPattern !== null, 'Anti-pattern detected');
 
-const before = getWeekdaysBefore('2026-03-09', 5);
-assert(before.length === 5, 'getWeekdaysBefore returns 5 dates');
-assert(before[0] < before[4], 'Dates are sorted ascending');
+    // Non-exhausted stock should not fire AVOID
+    const safeCandidate = {
+        macdCrossover: 'bullish', rsi: 55, structure: 'bullish',
+        return5d: 2, momentum: 6, rs: 60, volumeRatio: 1.1, dayChange: 1,
+        sectorFlow: 'inflow', daysToCover: 0, _regime: 'bull'
+    };
+    const safeResult = evaluateAllSignals(safeCandidate);
+    assert(safeResult.AVOID.quality === null, 'AVOID does not fire on safe stock');
+}
+
+// ═══════════════════════════════════════════════════
+// 7. Signal Evaluation — LDR, SQZ, QMO
+// ═══════════════════════════════════════════════════
+section('Signal Evaluation — LDR, SQZ, QMO');
+{
+    // LDR: RS>60 + sector inflow + bull structure
+    const ldrCandidate = {
+        macdCrossover: 'none', rsi: 55, structure: 'bullish',
+        return5d: 1, momentum: 5, rs: 70, volumeRatio: 1,
+        dayChange: 0, sectorFlow: 'inflow', daysToCover: 0, _regime: 'bull'
+    };
+    const ldrResult = evaluateAllSignals(ldrCandidate);
+    assert(ldrResult.LDR.quality === 'full', 'LDR full match');
+
+    // SQZ: DTC>5 + bull structure + sector inflow
+    const sqzCandidate = {
+        macdCrossover: 'none', rsi: 50, structure: 'bullish',
+        return5d: 0, momentum: 5, rs: 50, volumeRatio: 1,
+        dayChange: 0, sectorFlow: 'inflow', daysToCover: 7, _regime: 'bull'
+    };
+    const sqzResult = evaluateAllSignals(sqzCandidate);
+    assert(sqzResult.SQZ.quality === 'full', 'SQZ full match');
+
+    // QMO: vol<0.5x + mom>=7 + bull struct + RSI<70
+    const qmoCandidate = {
+        macdCrossover: 'none', rsi: 55, structure: 'bullish',
+        return5d: 3, momentum: 8, rs: 60, volumeRatio: 0.3,
+        dayChange: 1, sectorFlow: 'neutral', daysToCover: 0, _regime: 'bull'
+    };
+    const qmoResult = evaluateAllSignals(qmoCandidate);
+    assert(qmoResult.QMO.quality === 'full', 'QMO full match');
+}
+
+// ═══════════════════════════════════════════════════
+// 8. Conviction Derivation
+// ═══════════════════════════════════════════════════
+section('Conviction Derivation');
+{
+    assert(deriveConviction('full', 10) === 9, 'Full signal, low score → conviction 9');
+    assert(deriveConviction('full', 20) === 10, 'Full signal, high score → conviction 10');
+    assert(deriveConviction('strong', 10) === 8, 'Strong signal, low score → conviction 8');
+    assert(deriveConviction('strong', 20) === 9, 'Strong signal, high score → conviction 9');
+    assert(deriveConviction('partial', 10) === 7, 'Partial signal → conviction 7');
+    assert(deriveConviction('partial', 20) === 7, 'Partial signal, high score still 7');
+    assert(deriveConviction(null, 10) === 0, 'No signal → conviction 0');
+
+    // NOSIGNAL baseline
+    assert(deriveConviction(null, 20, true) === 10, 'NOSIGNAL score 20 → conviction 10');
+    assert(deriveConviction(null, 15, true) === 9, 'NOSIGNAL score 15 → conviction 9');
+    assert(deriveConviction(null, 12, true) === 8, 'NOSIGNAL score 12 → conviction 8');
+    assert(deriveConviction(null, 9, true) === 7, 'NOSIGNAL score 9 → conviction 7');
+    assert(deriveConviction(null, 3, true) === 0, 'NOSIGNAL score 3 → conviction 0');
+}
+
+// ═══════════════════════════════════════════════════
+// 9. Strategy Builder
+// ═══════════════════════════════════════════════════
+section('Strategy Builder');
+{
+    const strategy = buildStrategy('REV', 'trail8', 'calibrated');
+    assert(strategy.name === 'REV_trail8_calibrated', 'Strategy name correct');
+    assert(strategy.signal.code === 'REV', 'Signal code correct');
+    assert(strategy.exit.trailing === 0.08, 'Exit trailing correct');
+    assert(strategy.weightsName === 'calibrated', 'Weights name correct');
+    assert(strategy.entry.maxHoldings === 100, 'Entry rules inherited');
+
+    // Unknown signal should throw
+    let threw = false;
+    try { buildStrategy('INVALID', 'trail8'); } catch { threw = true; }
+    assert(threw, 'Unknown signal throws');
+
+    // Matrix generation
+    const small = generateMatrix({ signals: ['REV', 'MOM'], exits: ['trail8', 'stop10'], weights: ['calibrated'] });
+    assert(small.length === 4, 'Small matrix: 2 signals × 2 exits × 1 weight = 4');
+
+    const full = generateMatrix({ weights: ['calibrated'] });
+    const expectedCount = Object.keys(SIGNAL_CONFIGS).length * Object.keys(EXIT_CONFIGS).length;
+    assert(full.length === expectedCount, `Full matrix: ${expectedCount} combinations`);
+}
 
 // ═══════════════════════════════════════════════════
 // 10. Candidate Pool
 // ═══════════════════════════════════════════════════
 section('Candidate Pool');
-
-const mockScored = [];
-for (let i = 0; i < 50; i++) {
-    mockScored.push({
-        symbol: `SYM${i}`,
-        compositeScore: 20 - i * 0.4,
-        data: {
-            momentum: { score: 7 },
-            relativeStrength: { rsScore: 60 },
-            marketStructure: { structureScore: 1, choch: false, chochType: 'none', bos: false, bosType: 'none', sweep: 'none' },
-        },
-    });
-}
-const mockPool = createBacktestPortfolio(50000, 'test');
-mockPool.holdings = { SYM30: 10, SYM45: 5 }; // holdings not in top 25
-
-const pool = buildCandidatePool(mockScored, mockPool, {});
-assert(pool.length >= 25, 'Pool has at least 25 candidates');
-assert(pool.some(c => c.symbol === 'SYM30'), 'Current holdings included in pool');
-assert(pool.some(c => c.symbol === 'SYM45'), 'Current holdings included in pool');
-
-// ═══════════════════════════════════════════════════
-// 11. Strategy Configs
-// ═══════════════════════════════════════════════════
-section('Strategy Configs');
-
-for (const [name, strategy] of Object.entries(STRATEGIES)) {
-    assert(strategy.name, `Strategy ${name} has a name`);
-    assert(strategy.convictionMap?.tiers?.length > 0, `Strategy ${name} has conviction tiers`);
-    assert(strategy.entry, `Strategy ${name} has entry rules`);
-    assert(strategy.exit, `Strategy ${name} has exit rules`);
-    assert(strategy.exit.holdDiscipline, `Strategy ${name} has hold discipline`);
-}
-
-// ═══════════════════════════════════════════════════
-// 12. New Strategy-Specific Tests
-// ═══════════════════════════════════════════════════
-section('New Strategy Configs');
-
-// Conservative: high conviction floor, fewer holdings
-const conservative = STRATEGIES.conservative;
-assert(conservative.convictionMap.floor >= 8, 'Conservative floor >= 8');
-assert(conservative.entry.maxHoldings <= 6, 'Conservative max holdings <= 6');
-assert(scoreToConviction(11, conservative.convictionMap) === 0, 'Conservative rejects score 11');
-assert(scoreToConviction(12, conservative.convictionMap) >= 8, 'Conservative accepts score 12+');
-
-// PatientExit: longer holds, stricter degradation threshold
-const patientExit = STRATEGIES.patientExit;
-assert(patientExit.exit.holdDiscipline.minHoldDays >= 8, 'PatientExit min hold >= 8 days');
-assert(patientExit.exit.scoreDegradation.dropThreshold < 0.5, 'PatientExit degradation threshold stricter than baseline');
-assert(patientExit.exit.mechanicalTarget === null, 'PatientExit has no mechanical target');
-
-// RegimeIgnore: deployment override to always be fully deployed
-const regimeIgnore = STRATEGIES.regimeIgnore;
-assert(regimeIgnore.entry.deploymentOverride, 'RegimeIgnore has deployment override');
-assert(regimeIgnore.entry.deploymentOverride.min >= 0.90, 'RegimeIgnore deploys 90%+ regardless of regime');
-
-// ═══════════════════════════════════════════════════
-// 13. Deployment Override in Entry Rules
-// ═══════════════════════════════════════════════════
-section('Deployment Override');
-
-import { processEntries } from './engine/entry-rules.js';
-
-// Create a bear market scenario with regimeIgnore strategy — should still deploy
-const overridePortfolio = createBacktestPortfolio(50000, 'test');
-const overrideEnhanced = {};
-const overrideScored = [];
-for (let i = 0; i < 10; i++) {
-    const sym = `OVR${i}`;
-    overrideEnhanced[sym] = {
-        price: 100,
-        bars: Array(20).fill({ o: 99, h: 101, l: 98, c: 100, v: 1000000, t: Date.now() }),
-        momentum: { score: 7, volumeTrend: 1.1 },
-        relativeStrength: { rsScore: 60 },
-        compositeScore: 15,
+{
+    // Mock enhanced market with signals
+    const enhancedMarket = {
+        AAPL: { price: 150, signals: { REV: { quality: 'full' }, MOM: { quality: null }, AVOID: { quality: null } } },
+        MSFT: { price: 300, signals: { REV: { quality: 'strong' }, MOM: { quality: 'full' }, AVOID: { quality: null } } },
+        GOOG: { price: 140, signals: { REV: { quality: null }, MOM: { quality: null }, AVOID: { quality: null } } },
+        BAD: { price: 50, signals: { REV: { quality: 'full' }, MOM: { quality: null }, AVOID: { quality: 'strong' } } },
     };
-    overrideScored.push({ symbol: sym, compositeScore: 15, data: overrideEnhanced[sym] });
+    const scored = [
+        { symbol: 'AAPL', compositeScore: 15, data: enhancedMarket.AAPL },
+        { symbol: 'MSFT', compositeScore: 12, data: enhancedMarket.MSFT },
+        { symbol: 'GOOG', compositeScore: 10, data: enhancedMarket.GOOG },
+        { symbol: 'BAD', compositeScore: 18, data: enhancedMarket.BAD },
+    ];
+    const portfolio = { holdings: {} };
+
+    // REV signal: AAPL (full) + MSFT (strong) — BAD excluded by AVOID
+    const revStrategy = buildStrategy('REV', 'trail8');
+    const revPool = buildSignalPool(enhancedMarket, scored, revStrategy, portfolio);
+    assert(revPool.length === 2, 'REV pool: 2 candidates (AAPL + MSFT)');
+    assert(revPool.some(c => c.symbol === 'AAPL'), 'REV pool includes AAPL');
+    assert(revPool.some(c => c.symbol === 'MSFT'), 'REV pool includes MSFT');
+    assert(!revPool.some(c => c.symbol === 'BAD'), 'REV pool excludes BAD (AVOID)');
+
+    // NOSIGNAL: all except AVOID and Index Fund
+    const nosigStrategy = buildStrategy('NOSIGNAL', 'trail8');
+    const nosigPool = buildSignalPool(enhancedMarket, scored, nosigStrategy, portfolio);
+    assert(nosigPool.length === 3, 'NOSIGNAL pool: 3 candidates (excludes BAD/AVOID)');
 }
 
-// With regimeIgnore in bear market, should still buy (deployment override)
-const bearBuys = processEntries(overridePortfolio, overrideEnhanced, overrideScored, {}, 'bear', regimeIgnore, '2026-01-15', 35);
-assert(bearBuys > 0, 'RegimeIgnore buys in bear market');
+// ═══════════════════════════════════════════════════
+// 11. Position Sizing
+// ═══════════════════════════════════════════════════
+section('Position Sizing');
+{
+    const portfolio = createBacktestPortfolio(100000, 'test');
+    const prices = { AAPL: { price: 150 } };
 
-// With baseline in bear market and same setup, deployment cap is tighter
-const baselinePortfolio = createBacktestPortfolio(50000, 'test');
-const baselineBearBuys = processEntries(baselinePortfolio, overrideEnhanced, overrideScored, {}, 'bear', baseline, '2026-01-15', 35);
-// Both should buy since starting from 100% cash, but regimeIgnore should buy at least as many
-assert(bearBuys >= baselineBearBuys, 'RegimeIgnore buys >= baseline in bear market');
+    const shares6 = calculatePositionSize(portfolio, 6, 'bull', 150, prices);
+    assert(shares6 > 0, 'Conviction 6 produces shares');
+
+    const shares10 = calculatePositionSize(portfolio, 10, 'bull', 150, prices);
+    assert(shares10 > shares6, 'Conviction 10 gets more shares than 6');
+
+    const shares5 = calculatePositionSize(portfolio, 5, 'bull', 150, prices);
+    assert(shares5 === 0, 'Conviction 5 → 0 shares');
+}
 
 // ═══════════════════════════════════════════════════
-// 14. Score Attribution on Closed Trades
+// 12. Trading Day Calculations
 // ═══════════════════════════════════════════════════
-section('Score Attribution');
+section('Trading Day Calculations');
+{
+    const friday = new Date('2026-03-06T16:00:00Z'); // Friday
+    const nextWeek = addTradingDays(friday, 1);
+    assert(nextWeek.getDay() === 1, 'Next trading day after Friday is Monday');
 
-// Buy with scoreBreakdown available in marketData, then sell with changed breakdown
-const attrPortfolio = createBacktestPortfolio(50000, 'test');
-const entryBreakdown = {
-    momentumContrib: 4.2, rsContrib: 3.6, sectorBonus: 1.5, accelBonus: 1.0,
-    consistencyBonus: 0.5, structureBonus: 2.5, extensionPenalty: 0, pullbackBonus: 0,
-    runnerPenalty: 0, declinePenalty: 0, rsiBonusPenalty: 0, macdBonus: 1.0,
-    rsMeanRevPenalty: 0, squeezeBonus: 0, volumeBonus: 0, fvgBonus: 0,
-    smaProximityBonus: 2.0, smaCrossoverBonus: 0, entryMultiplier: 1.0,
-};
-const exitBreakdown = {
-    momentumContrib: 1.8, rsContrib: 1.2, sectorBonus: 0, accelBonus: 0,
-    consistencyBonus: 0, structureBonus: 0.5, extensionPenalty: -1.5, pullbackBonus: 0,
-    runnerPenalty: 0, declinePenalty: 0, rsiBonusPenalty: -1.0, macdBonus: 0,
-    rsMeanRevPenalty: 0, squeezeBonus: 0, volumeBonus: 0, fvgBonus: 0,
-    smaProximityBonus: 0, smaCrossoverBonus: 0, entryMultiplier: 0.6,
-};
+    const days = countTradingDays(new Date('2026-03-02'), new Date('2026-03-06'));
+    assert(days === 4, 'Mon→Fri = 4 trading days');
 
-const attrEntryData = {
-    ATTR: {
-        price: 100, compositeScore: 16.3,
-        scoreBreakdown: entryBreakdown,
-        momentum: { score: 7 }, relativeStrength: { rsScore: 60 },
-    },
-};
-executeBuy(attrPortfolio, {
-    symbol: 'ATTR', shares: 10, price: 100, conviction: 9,
-    reasoning: 'Test', marketData: attrEntryData, agentName: 'Test', simDate: '2026-01-15',
-});
-
-// Verify entry breakdown stored in thesis
-assert(attrPortfolio.holdingTheses.ATTR.entryBreakdown != null, 'Entry breakdown stored in thesis');
-assert(attrPortfolio.holdingTheses.ATTR.entryBreakdown.momentumContrib === 4.2, 'Entry momentum contrib correct');
-
-// Now sell with degraded scores
-const attrExitData = {
-    ATTR: {
-        price: 95, compositeScore: 1.2,
-        scoreBreakdown: exitBreakdown,
-        momentum: { score: 3 }, relativeStrength: { rsScore: 20 },
-    },
-};
-executeSell(attrPortfolio, {
-    symbol: 'ATTR', shares: 10, price: 95, exitReason: 'score_degradation',
-    reasoning: 'Test', marketData: attrExitData, agentName: 'Test', simDate: '2026-01-22',
-});
-
-const attrTrade = attrPortfolio.closedTrades[0];
-assert(attrTrade.entryBreakdown != null, 'Closed trade has entryBreakdown');
-assert(attrTrade.exitBreakdown != null, 'Closed trade has exitBreakdown');
-assert(attrTrade.breakdownDelta != null, 'Closed trade has breakdownDelta');
-assert(attrTrade.entryBreakdown.momentumContrib === 4.2, 'Entry momentum preserved');
-assert(attrTrade.exitBreakdown.momentumContrib === 1.8, 'Exit momentum captured');
-assert(attrTrade.breakdownDelta.momentumContrib === -2.4, 'Momentum delta = -2.4');
-assert(attrTrade.breakdownDelta.structureBonus === -2.0, 'Structure delta = -2.0');
-assert(attrTrade.breakdownDelta.extensionPenalty === -1.5, 'Extension penalty delta = -1.5');
-assert(attrTrade.entryCompositeScore === 16.3, 'Entry composite score stored');
-assert(attrTrade.exitCompositeScore === 1.2, 'Exit composite score stored');
+    const weekdays = generateWeekdays(new Date('2026-03-02'), new Date('2026-03-06'));
+    assert(weekdays.length === 5, 'Mon-Fri = 5 weekdays');
+}
 
 // ═══════════════════════════════════════════════════
-// 15. DataManager (unit tests — no API calls)
+// 13. Buy/Sell Execution
 // ═══════════════════════════════════════════════════
-section('DataManager Windowing');
+section('Buy/Sell Execution');
+{
+    const p = createBacktestPortfolio(50000, 'test');
+    const md = { AAPL: { price: 150, momentum: { score: 7 }, relativeStrength: { rsScore: 60 }, marketStructure: { structure: 'bullish', structureScore: 2 }, sectorRotation: { moneyFlow: 'inflow' }, rsi: 45, sma20: 148, macd: { crossover: 'none' }, smaCrossover: null, compositeScore: 12, scoreBreakdown: {} } };
 
-const dm = new DataManager();
-// Manually inject test data — need at least 5 bars visible for getMarketState to include a symbol
-dm.masterBars = {
-    'TEST': [
-        { o: 96, h: 97, l: 95, c: 96, v: 800, t: new Date('2025-12-29T16:00:00Z').getTime() },
-        { o: 97, h: 98, l: 96, c: 97, v: 900, t: new Date('2025-12-30T16:00:00Z').getTime() },
-        { o: 98, h: 99, l: 97, c: 98, v: 950, t: new Date('2025-12-31T16:00:00Z').getTime() },
-        { o: 100, h: 101, l: 99, c: 100, v: 1000, t: new Date('2026-01-02T16:00:00Z').getTime() },
-        { o: 101, h: 102, l: 100, c: 101, v: 1100, t: new Date('2026-01-03T16:00:00Z').getTime() },
-        { o: 102, h: 103, l: 101, c: 102, v: 1200, t: new Date('2026-01-06T16:00:00Z').getTime() },
-        { o: 103, h: 104, l: 102, c: 103, v: 1300, t: new Date('2026-01-07T16:00:00Z').getTime() },
-        { o: 104, h: 105, l: 103, c: 104, v: 1400, t: new Date('2026-01-08T16:00:00Z').getTime() },
-    ],
-};
+    const bought = executeBuy(p, { symbol: 'AAPL', shares: 10, price: 150, conviction: 8, reasoning: 'Test', marketData: md, vix: { level: 15 }, agentName: 'test', simDate: '2026-03-02', signalCode: 'REV', signalQuality: 'full' });
+    assert(bought === true, 'Buy succeeds');
+    assert(p.holdings.AAPL === 10, 'Holdings updated');
+    assert(p.cash === 48500, 'Cash reduced');
+    assert(p.holdingTheses.AAPL.signalCode === 'REV', 'Signal code stored in thesis');
+    assert(p.holdingTheses.AAPL.signalQuality === 'full', 'Signal quality stored in thesis');
+    assert(p.holdingTheses.AAPL.highWaterMark === 150, 'High water mark initialized');
 
-// Windowed view on Jan 6 should NOT include Jan 7 or Jan 8
-const { marketData: md1, multiDayCache: mdc1 } = dm.getMarketState('2026-01-06');
-assert(mdc1.TEST.length === 6, 'Windowed to 6 bars (Dec 29,30,31, Jan 2,3,6)');
-assert(md1.TEST.price === 102, 'Current price is Jan 6 close');
+    const sold = executeSell(p, { symbol: 'AAPL', shares: 10, price: 165, reasoning: 'Trailing stop', exitReason: 'trailing_stop', marketData: md, agentName: 'test', simDate: '2026-03-10' });
+    assert(sold === true, 'Sell succeeds');
+    assert(!p.holdings.AAPL, 'Holdings cleared');
+    assert(p.closedTrades.length === 1, 'Closed trade recorded');
+    assert(p.closedTrades[0].signalCode === 'REV', 'Signal code on closed trade');
+    assert(p.closedTrades[0].exitReason === 'trailing_stop', 'Exit reason recorded');
+}
 
-// Full view on Jan 8 should include all 8 bars
-const { marketData: md2, multiDayCache: mdc2 } = dm.getMarketState('2026-01-08');
-assert(mdc2.TEST.length === 8, 'All 8 bars visible on Jan 8');
-assert(md2.TEST.price === 104, 'Current price is Jan 8 close');
+// ═══════════════════════════════════════════════════
+// 14. RSI Calculation
+// ═══════════════════════════════════════════════════
+section('RSI Calculation');
+{
+    const bars = [];
+    for (let i = 0; i < 20; i++) bars.push({ c: 100 + i * 0.5, h: 101 + i, l: 99, v: 1000 });
+    const rsi = calculateRSI(bars);
+    assert(rsi !== null, 'RSI calculated');
+    assert(rsi > 50, 'Uptrend RSI > 50');
 
-// View BEFORE any data should return empty (< 5 bars visible)
-const { marketData: md0 } = dm.getMarketState('2025-12-29');
-assert(!md0.TEST, 'No data with fewer than 5 bars');
+    assert(calculateRSI(null) === null, 'RSI null for null bars');
+    assert(calculateRSI(bars.slice(0, 5)) === null, 'RSI null for insufficient bars');
+}
+
+// ═══════════════════════════════════════════════════
+// 15. SMA Calculation
+// ═══════════════════════════════════════════════════
+section('SMA Calculation');
+{
+    const bars = Array.from({ length: 25 }, (_, i) => ({ c: 100 + i, h: 101 + i, l: 99 + i, v: 1000 }));
+    const sma = calculateSMA(bars, 20);
+    assert(sma !== null, 'SMA calculated');
+    assert(sma > 100, 'SMA reasonable value');
+    assert(calculateSMA(bars.slice(0, 5), 20) === null, 'SMA null for insufficient bars');
+}
+
+// ═══════════════════════════════════════════════════
+// 16. MACD Calculation
+// ═══════════════════════════════════════════════════
+section('MACD Calculation');
+{
+    const bars = Array.from({ length: 40 }, (_, i) => ({ c: 100 + Math.sin(i * 0.3) * 5, h: 105, l: 95, v: 1000 }));
+    const macd = calculateMACD(bars);
+    assert(macd !== null, 'MACD calculated');
+    assert(typeof macd.histogram === 'number', 'MACD has histogram');
+    assert(['bullish', 'bearish', 'none'].includes(macd.crossover), 'MACD has valid crossover');
+    assert(calculateMACD(bars.slice(0, 10)) === null, 'MACD null for insufficient bars');
+}
+
+// ═══════════════════════════════════════════════════
+// 17. Structure Detection
+// ═══════════════════════════════════════════════════
+section('Structure Detection');
+{
+    // Create bars with clear swing highs and lows for structure detection
+    // Pattern: up, peak, dip, up higher, peak higher, dip higher...
+    const bullBars = [
+        { h: 102, l: 98, c: 101, v: 1000, t: 1 },
+        { h: 105, l: 100, c: 104, v: 1000, t: 2 },  // swing high candidate
+        { h: 103, l: 99, c: 100, v: 1000, t: 3 },
+        { h: 101, l: 96, c: 97, v: 1000, t: 4 },     // swing low candidate
+        { h: 103, l: 98, c: 102, v: 1000, t: 5 },
+        { h: 107, l: 102, c: 106, v: 1000, t: 6 },   // higher swing high
+        { h: 105, l: 101, c: 103, v: 1000, t: 7 },
+        { h: 104, l: 99, c: 100, v: 1000, t: 8 },    // higher swing low
+        { h: 106, l: 101, c: 105, v: 1000, t: 9 },
+        { h: 110, l: 105, c: 109, v: 1000, t: 10 },  // even higher swing high
+        { h: 108, l: 103, c: 105, v: 1000, t: 11 },
+    ];
+    const struct = detectStructure(bullBars);
+    assert(struct.structure !== 'unknown', 'Structure detected');
+    assert(typeof struct.structureScore === 'number', 'Structure has score');
+    assert(struct.structureScore >= -3 && struct.structureScore <= 3, 'Structure score in range');
+
+    assert(detectStructure(null).structure === 'unknown', 'Null bars → unknown');
+    assert(detectStructure([]).structure === 'unknown', 'Empty bars → unknown');
+}
+
+// ═══════════════════════════════════════════════════
+// 18. ATR Calculation
+// ═══════════════════════════════════════════════════
+section('ATR Calculation');
+{
+    const bars = Array.from({ length: 20 }, (_, i) => ({
+        h: 105 + i, l: 95 + i, c: 100 + i, v: 1000
+    }));
+    const atr = calculateATR(bars);
+    assert(atr !== null, 'ATR calculated');
+    assert(atr > 0, 'ATR positive');
+    assert(calculateATR(bars.slice(0, 5)) === null, 'ATR null for insufficient bars');
+}
+
+// ═══════════════════════════════════════════════════
+// 19. 5-Day Momentum
+// ═══════════════════════════════════════════════════
+section('5-Day Momentum');
+{
+    const upBars = [
+        { c: 100, h: 101, l: 99, v: 1000 },
+        { c: 102, h: 103, l: 101, v: 1200 },
+        { c: 104, h: 105, l: 103, v: 1100 },
+        { c: 106, h: 107, l: 105, v: 1300 },
+        { c: 108, h: 109, l: 107, v: 1400 },
+    ];
+    const mom = calculate5DayMomentum({ price: 108, changePercent: 2 }, upBars);
+    assert(mom.score >= 6, 'Uptrend momentum score >= 6');
+    assert(mom.totalReturn5d > 0, 'Positive 5d return');
+
+    const downBars = [
+        { c: 100, h: 101, l: 99, v: 1000 },
+        { c: 98, h: 99, l: 97, v: 1200 },
+        { c: 96, h: 97, l: 95, v: 1100 },
+        { c: 94, h: 95, l: 93, v: 1300 },
+        { c: 92, h: 93, l: 91, v: 1400 },
+    ];
+    const momDown = calculate5DayMomentum({ price: 92, changePercent: -2 }, downBars);
+    assert(momDown.score <= 4, 'Downtrend momentum score <= 4');
+}
+
+// ═══════════════════════════════════════════════════
+// 20. Composite Score
+// ═══════════════════════════════════════════════════
+section('Composite Score');
+{
+    const result = calculateCompositeScore({
+        momentumScore: 7, rsNormalized: 6, sectorFlow: 'inflow',
+        structureScore: 2, isAccelerating: true, upDays: 4, totalDays: 4,
+        todayChange: 2, totalReturn5d: 3, rsi: 45,
+        macdCrossover: 'bullish', daysToCover: 0, volumeTrend: 1.1,
+        fvg: 'none', sma20: 150, currentPrice: 152, smaCrossover: null
+    });
+    assert(result.total > 0, 'Bullish setup has positive score');
+    assert(typeof result.breakdown === 'object', 'Score has breakdown');
+    assert(result.breakdown.momentumContrib > 0, 'Momentum contributes positively');
+    assert(result.breakdown.structureBonus > 0, 'Structure contributes positively');
+
+    // Overbought should have lower or negative adjustments
+    const overbought = calculateCompositeScore({
+        momentumScore: 9.5, rsNormalized: 9, sectorFlow: 'neutral',
+        structureScore: 1, isAccelerating: true, upDays: 4, totalDays: 4,
+        todayChange: 8, totalReturn5d: 15, rsi: 82,
+        macdCrossover: 'bullish', daysToCover: 0, volumeTrend: 1,
+        fvg: 'none', sma20: 150, currentPrice: 180, smaCrossover: null
+    });
+    assert(overbought.breakdown.extensionPenalty < 0, 'Extension penalty applied');
+    assert(overbought.breakdown.rsiBonusPenalty < 0, 'RSI overbought penalty applied');
+    assert(overbought.breakdown.entryMultiplier < 1, 'Entry multiplier penalizes extended setups');
+}
+
+// ═══════════════════════════════════════════════════
+// 21. Signal-to-Candidate Normalization
+// ═══════════════════════════════════════════════════
+section('Signal Candidate Normalization');
+{
+    const enriched = {
+        macd: { crossover: 'bullish', histogram: 0.5 },
+        rsi: 38,
+        marketStructure: { structure: 'bullish', structureScore: 2 },
+        momentum: { score: 6, totalReturn5d: -3, todayChange: -1, volumeTrend: 0.9 },
+        relativeStrength: { rsScore: 65 },
+        sectorRotation: { moneyFlow: 'inflow' },
+        shortInterest: null,
+        changePercent: -1,
+    };
+    const candidate = toSignalCandidate(enriched, 'bull');
+    assert(candidate.macdCrossover === 'bullish', 'MACD crossover mapped');
+    assert(candidate.rsi === 38, 'RSI mapped');
+    assert(candidate.structure === 'bullish', 'Structure mapped');
+    assert(candidate.return5d === -3, 'Return5d mapped');
+    assert(candidate.momentum === 6, 'Momentum mapped');
+    assert(candidate.rs === 65, 'RS mapped');
+    assert(candidate._regime === 'bull', 'Regime mapped');
+}
+
+// ═══════════════════════════════════════════════════
+// 22. Exit Strategy Configs
+// ═══════════════════════════════════════════════════
+section('Exit Strategy Configs');
+{
+    assert(EXIT_CONFIGS.trail8.trailing === 0.08, 'trail8 has 8% trailing');
+    assert(EXIT_CONFIGS.target15.target === 0.15, 'target15 has 15% target');
+    assert(EXIT_CONFIGS.time10.timeBased === 10, 'time10 has 10 day limit');
+    assert(EXIT_CONFIGS.degrade50.degradation === 0.50, 'degrade50 has 50% threshold');
+    assert(EXIT_CONFIGS.trailATR.trailing === 'atr2x', 'trailATR uses 2x ATR');
+    assert(EXIT_CONFIGS.target15_trail8.target === 0.15 && EXIT_CONFIGS.target15_trail8.trailing === 0.08, 'Combo: target + trailing');
+}
+
+// ═══════════════════════════════════════════════════
+// 23. Results Metrics
+// ═══════════════════════════════════════════════════
+section('Results Metrics');
+{
+    const portfolio = createBacktestPortfolio(50000, 'test');
+    portfolio.closedTrades = [
+        { profitLoss: 500, returnPercent: 10, holdTimeDays: 5, exitReason: 'profit_target', sector: 'Technology', entryRegime: 'bull', signalCode: 'REV', signalQuality: 'full' },
+        { profitLoss: -200, returnPercent: -4, holdTimeDays: 3, exitReason: 'stop_loss', sector: 'Technology', entryRegime: 'bull', signalCode: 'REV', signalQuality: 'strong' },
+        { profitLoss: 300, returnPercent: 6, holdTimeDays: 8, exitReason: 'trailing_stop', sector: 'Healthcare', entryRegime: 'choppy', signalCode: 'MOM', signalQuality: 'full' },
+    ];
+    const snapshots = [
+        { date: '2026-01-02', portfolioValue: 50000, spyPrice: 450 },
+        { date: '2026-01-03', portfolioValue: 50500, spyPrice: 452 },
+        { date: '2026-01-06', portfolioValue: 50600, spyPrice: 454 },
+    ];
+
+    const metrics = computeResults(portfolio, snapshots, 50000);
+    assert(metrics.totalTrades === 3, 'Total trades = 3');
+    assert(metrics.winRate > 50, 'Win rate > 50% (2/3 winners)');
+    assert(metrics.exitReasons.profit_target === 1, 'Exit reason tracked');
+    assert(metrics.exitReasons.trailing_stop === 1, 'Trailing stop tracked');
+    assert(metrics.signalAccuracy.REV.trades === 2, 'REV signal accuracy: 2 trades');
+    assert(metrics.signalAccuracy.REV.wins === 1, 'REV: 1 win');
+    assert(metrics.signalAccuracy.MOM.trades === 1, 'MOM signal accuracy: 1 trade');
+    assert(metrics.signalAccuracy.REV.byQuality.full.trades === 1, 'REV full quality: 1 trade');
+    assert(metrics.signalAccuracy.REV.byQuality.strong.trades === 1, 'REV strong quality: 1 trade');
+}
+
+// ═══════════════════════════════════════════════════
+// 24. Matrix Summary
+// ═══════════════════════════════════════════════════
+section('Matrix Summary');
+{
+    const mockResults = [
+        { strategy: 'REV_trail8_calibrated', metrics: { totalReturn: 12, winRate: 58, sharpe: 1.2, totalTrades: 24, maxDrawdown: 8, profitFactor: 2.1, avgHoldDays: 5 } },
+        { strategy: 'NOSIGNAL_trail8_calibrated', metrics: { totalReturn: 8, winRate: 50, sharpe: 0.8, totalTrades: 30, maxDrawdown: 10, profitFactor: 1.5, avgHoldDays: 6 } },
+        { strategy: 'MOM_trail8_calibrated', metrics: { totalReturn: -2, winRate: 42, sharpe: -0.3, totalTrades: 18, maxDrawdown: 12, profitFactor: 0.8, avgHoldDays: 7 } },
+    ];
+    const summary = computeMatrixSummary(mockResults, '2025-06-01', '2026-03-15');
+    assert(summary.type === 'matrix', 'Summary type = matrix');
+    assert(summary.totalCombinations === 3, 'Total combinations = 3');
+    assert(summary.grid.REV.trail8.calibrated.totalReturn === 12, 'Grid REV/trail8 return = 12');
+    assert(summary.grid.REV.trail8.calibrated.vsBaseline.returnDelta === 4, 'REV alpha = +4% vs NOSIGNAL');
+    assert(summary.best.byReturn.signal === 'REV', 'Best by return = REV');
+}
+
+// ═══════════════════════════════════════════════════
+// 25. Data Manager (weekday generation)
+// ═══════════════════════════════════════════════════
+section('Data Manager');
+{
+    const start = new Date('2026-03-02');
+    const end = new Date('2026-03-06');
+    const days = generateWeekdays(start, end);
+    assert(days.length === 5, 'Mon-Fri = 5 weekdays');
+    assert(days[0] === '2026-03-02', 'First day is Monday');
+    assert(days[4] === '2026-03-06', 'Last day is Friday');
+
+    const before = getWeekdaysBefore(new Date('2026-03-06'), 5);
+    assert(before.length === 5, '5 weekdays before Friday');
+}
+
+// ═══════════════════════════════════════════════════
+// 26. Hold Discipline
+// ═══════════════════════════════════════════════════
+section('Hold Discipline');
+{
+    const p = createBacktestPortfolio(50000, 'test');
+    executeBuy(p, { symbol: 'TEST', shares: 10, price: 100, conviction: 8, reasoning: 'test', marketData: {}, agentName: 'test', simDate: '2026-03-02' });
+
+    // Same-day sell should be blocked
+    const sameDaySell = executeSell(p, { symbol: 'TEST', shares: 10, price: 105, reasoning: 'too soon', exitReason: 'profit_target', marketData: {}, agentName: 'test', simDate: '2026-03-02' });
+    assert(sameDaySell === false, 'Same-day sell blocked (anti-whipsaw)');
+
+    // Next-day sell at small loss should be blocked (hold discipline, <3 days)
+    const earlySmallLoss = executeSell(p, { symbol: 'TEST', shares: 10, price: 95, reasoning: 'small loss', exitReason: 'stop_loss', marketData: {}, agentName: 'test', simDate: '2026-03-03' });
+    assert(earlySmallLoss === false, 'Early small-loss sell blocked (<3 days, >-15%)');
+
+    // Extreme loss should override hold discipline
+    const extremeLoss = executeSell(p, { symbol: 'TEST', shares: 10, price: 80, reasoning: 'crash', exitReason: 'stop_loss', marketData: {}, agentName: 'test', simDate: '2026-03-03' });
+    assert(extremeLoss === true, 'Extreme loss (-20%) overrides hold discipline');
+}
+
+// ═══════════════════════════════════════════════════
+// 27. Rebuy Cooldown
+// ═══════════════════════════════════════════════════
+section('Rebuy Cooldown');
+{
+    const p = createBacktestPortfolio(50000, 'test');
+    executeBuy(p, { symbol: 'XYZ', shares: 5, price: 100, conviction: 8, reasoning: 'test', marketData: {}, agentName: 'test', simDate: '2026-03-02' });
+    executeSell(p, { symbol: 'XYZ', shares: 5, price: 110, reasoning: 'profit', exitReason: 'profit_target', marketData: {}, agentName: 'test', simDate: '2026-03-06' });
+
+    // Immediate rebuy should be blocked
+    const rebuy = executeBuy(p, { symbol: 'XYZ', shares: 5, price: 108, conviction: 8, reasoning: 'rebuy', marketData: {}, agentName: 'test', simDate: '2026-03-07' });
+    assert(rebuy === false, 'Rebuy blocked during cooldown');
+}
+
+// ═══════════════════════════════════════════════════
+// 28. Unconstrained Mode
+// ═══════════════════════════════════════════════════
+section('Unconstrained Mode');
+{
+    // Strategy builder with unconstrained flag
+    const uncStrategy = buildStrategy('REV', 'time15', 'calibrated', true);
+    assert(uncStrategy.entry.unconstrained === true, 'Unconstrained flag set');
+    assert(uncStrategy.entry.maxHoldings === Infinity, 'Unconstrained: infinite maxHoldings');
+    assert(uncStrategy.entry.maxBuysPerDay === Infinity, 'Unconstrained: infinite buys/day');
+    assert(uncStrategy.entry.rebuyCooldownDays === 0, 'Unconstrained: no rebuy cooldown');
+    assert(uncStrategy.entry.fixedPositionSize === 5000, 'Unconstrained: $5K position size');
+    assert(uncStrategy.name.endsWith('_unc'), 'Unconstrained strategy name has _unc suffix');
+
+    // Constrained strategy should NOT have unconstrained flag
+    const conStrategy = buildStrategy('REV', 'time15', 'calibrated', false);
+    assert(!conStrategy.entry.unconstrained, 'Constrained: no unconstrained flag');
+    assert(conStrategy.entry.maxHoldings === 100, 'Constrained: maxHoldings = 100');
+
+    // Matrix generation with unconstrained
+    const uncMatrix = generateMatrix({ signals: ['REV'], exits: ['time15'], weights: ['calibrated'], unconstrained: true });
+    assert(uncMatrix.length === 1, 'Unconstrained matrix: 1 combo');
+    assert(uncMatrix[0].entry.unconstrained === true, 'Matrix strategy is unconstrained');
+
+    // Unconstrained entry rules config
+    assert(UNCONSTRAINED_ENTRY_RULES.maxHoldings === Infinity, 'UNCONSTRAINED_ENTRY_RULES: infinite holdings');
+    assert(UNCONSTRAINED_ENTRY_RULES.fixedPositionSize === 5000, 'UNCONSTRAINED_ENTRY_RULES: $5K positions');
+    assert(UNCONSTRAINED_ENTRY_RULES.maxSectorConcentration === 1.0, 'UNCONSTRAINED_ENTRY_RULES: no sector cap');
+
+    // Portfolio with unconstrained flag
+    const uncPortfolio = createBacktestPortfolio(50000, 'test', { unconstrained: true });
+    assert(uncPortfolio.unconstrained === true, 'Unconstrained portfolio flagged');
+    assert(uncPortfolio.cash === Infinity, 'Unconstrained portfolio: infinite cash');
+
+    // Unconstrained buy skips rebuy cooldown
+    const p = createBacktestPortfolio(50000, 'test', { unconstrained: true });
+    executeBuy(p, { symbol: 'XYZ', shares: 5, price: 100, conviction: 8, reasoning: 'test', marketData: {}, agentName: 'test', simDate: '2026-03-02' });
+    executeSell(p, { symbol: 'XYZ', shares: 5, price: 110, reasoning: 'profit', exitReason: 'profit_target', marketData: {}, agentName: 'test', simDate: '2026-03-06' });
+    const rebuy = executeBuy(p, { symbol: 'XYZ', shares: 5, price: 108, conviction: 8, reasoning: 'rebuy', marketData: {}, agentName: 'test', simDate: '2026-03-07' });
+    assert(rebuy === true, 'Unconstrained: rebuy NOT blocked (no cooldown)');
+}
+
+// ═══════════════════════════════════════════════════
+// 29. Signal Pattern Definitions
+// ═══════════════════════════════════════════════════
+section('Signal Pattern Definitions');
+{
+    assert(ENTRY_SIGNAL_PATTERNS.length === 6, '6 signal patterns defined');
+    assert(ENTRY_SIGNAL_PATTERNS[0].id === 'REV', 'First pattern is REV');
+    assert(ENTRY_SIGNAL_PATTERNS[5].id === 'AVOID', 'Last pattern is AVOID');
+    assert(ENTRY_SIGNAL_PATTERNS[5].antiPattern === true, 'AVOID is anti-pattern');
+
+    // All patterns have required fields
+    for (const p of ENTRY_SIGNAL_PATTERNS) {
+        assert(p.id && p.badge && p.criteria.length > 0, `Pattern ${p.id} has id, badge, criteria`);
+        assert(typeof p.minMatch === 'number', `Pattern ${p.id} has minMatch`);
+        assert(Array.isArray(p.requireAny), `Pattern ${p.id} has requireAny`);
+    }
+}
 
 // ═══════════════════════════════════════════════════
 // Summary
 // ═══════════════════════════════════════════════════
-console.log('\n══════════════════════════════════════════════════');
-console.log(`Tests: ${passed} passed, ${failed} failed`);
-console.log('══════════════════════════════════════════════════');
-
+console.log(`\n${'═'.repeat(50)}`);
+console.log(`Tests: ${passed} passed, ${failed} failed, ${passed + failed} total`);
+console.log(`${'═'.repeat(50)}`);
 if (failed > 0) process.exit(1);

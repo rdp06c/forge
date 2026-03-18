@@ -1,8 +1,9 @@
-// FORGE Backtester Dashboard — Client-side application
+// FORGE Signal Backtester Dashboard — Client-side application
 
 const COLORS = ['#3b82f6', '#22c55e', '#ef4444', '#a855f7', '#f59e0b', '#06b6d4'];
 
 let chartInstances = {};
+let matrixData = null;
 
 // ═══════════════════════════════════════════════════
 // Navigation
@@ -18,8 +19,10 @@ function showView(viewName) {
     const btn = document.querySelector(`.nav button[data-view="${viewName}"]`);
     if (btn) btn.classList.add('active');
 
-    if (viewName === 'overview') loadOverview();
-    if (viewName === 'comparison') loadComparison();
+    if (viewName === 'consistency') loadConsistency();
+    if (viewName === 'matrix') loadMatrix();
+    if (viewName === 'signals') loadSignalAccuracy();
+    if (viewName === 'results') loadResults();
     if (viewName === 'mytrades') loadMyTrades();
 }
 
@@ -28,544 +31,443 @@ document.querySelectorAll('.nav button').forEach(btn => {
 });
 
 // ═══════════════════════════════════════════════════
-// Overview — list of backtest results
+// Consistency View (primary)
 // ═══════════════════════════════════════════════════
 
-async function loadOverview() {
-    const el = document.getElementById('results-list');
+async function loadConsistency() {
+    const container = document.getElementById('consistency-content');
     try {
-        const resp = await fetch('/api/results');
-        const { results } = await resp.json();
-
-        if (!results || results.length === 0) {
-            el.innerHTML = `<div class="empty-state">
-                <h2>No backtest results yet</h2>
-                <p>Run a backtest to see results here</p>
-                <code>node backtest.js --strategy=baseline</code>
-            </div>`;
+        const res = await fetch('/api/consistency');
+        const { strategies } = await res.json();
+        if (!strategies || Object.keys(strategies).length === 0) {
+            container.innerHTML = '<p class="empty">No multi-period results. Run: <code>node backtest.js --signal=REV --matrix</code> across multiple time periods.</p>';
             return;
         }
 
-        el.innerHTML = `<table class="results-table">
-            <thead><tr>
-                <th>Strategy</th><th>Period</th><th>Return</th><th>SPY</th>
-                <th>Sharpe</th><th>Win Rate</th><th>Trades</th><th>Max DD</th><th>PF</th>
-            </tr></thead>
-            <tbody>${results.map(r => {
-                if (r.error) return `<tr><td colspan="9">${r.filename} — error loading</td></tr>`;
-                const retClass = (r.totalReturn || 0) >= 0 ? 'positive' : 'negative';
-                const spyClass = (r.spyReturn || 0) >= 0 ? 'positive' : 'negative';
-                return `<tr onclick="loadDetail('${r.filename}')">
-                    <td><strong>${r.strategy}</strong></td>
-                    <td>${r.startDate || '?'} &rarr; ${r.endDate || '?'}</td>
-                    <td class="${retClass}">${fmtSign(r.totalReturn, '%')}</td>
-                    <td class="${spyClass}">${fmtSign(r.spyReturn, '%')}</td>
-                    <td>${r.sharpe ?? 'N/A'}</td>
-                    <td>${fmt(r.winRate, '%')}</td>
-                    <td>${r.totalTrades ?? 0}</td>
-                    <td class="negative">${r.maxDrawdown != null ? '-' + r.maxDrawdown + '%' : 'N/A'}</td>
-                    <td>${r.profitFactor ?? 'N/A'}</td>
-                </tr>`;
-            }).join('')}</tbody>
-        </table>`;
-    } catch (err) {
-        el.innerHTML = `<div class="empty-state"><h2>Error loading results</h2><p>${err.message}</p></div>`;
-    }
-}
+        const periods = ['6mo', '1yr', '3yr', '5yr', '8yr'];
 
-// ═══════════════════════════════════════════════════
-// Detail — full metrics for one backtest result
-// ═══════════════════════════════════════════════════
-
-async function loadDetail(filename) {
-    const el = document.getElementById('detail-content');
-    const tab = document.getElementById('detail-tab');
-    tab.style.display = '';
-
-    try {
-        const resp = await fetch('/api/result/' + encodeURIComponent(filename));
-        const data = await resp.json();
-        if (data.error) { el.innerHTML = `<p>${data.error}</p>`; showView('detail'); return; }
-
-        const m = data.metrics || {};
-        const trades = data.portfolio?.closedTrades || [];
-
-        // Metrics cards
-        let html = `<h2 style="margin-bottom:16px">${data.strategy} <span style="color:var(--text-muted);font-size:13px">${m.equityCurve?.[0]?.date || ''} &rarr; ${m.equityCurve?.[m.equityCurve.length-1]?.date || ''}</span></h2>`;
-
-        html += `<div class="metrics-grid">
-            ${metricCard('Total Return', fmtSign(m.totalReturn, '%'), m.totalReturn >= 0)}
-            ${metricCard('Annualized', fmtSign(m.annualizedReturn, '%'), m.annualizedReturn >= 0)}
-            ${metricCard('Final Value', '$' + (m.finalValue?.toLocaleString() || '?'), true, '$' + (m.initialBalance?.toLocaleString() || '?') + ' initial')}
-            ${metricCard('Max Drawdown', '-' + m.maxDrawdown + '%', false, m.maxDrawdownDuration + ' days')}
-            ${metricCard('Sharpe Ratio', m.sharpe ?? 'N/A', (m.sharpe || 0) >= 0)}
-            ${metricCard('SPY Return', fmtSign(m.spyReturn, '%'), (m.spyReturn || 0) >= 0)}
-            ${metricCard('Win Rate', fmt(m.winRate, '%'), (m.winRate || 0) >= 50)}
-            ${metricCard('Total Trades', m.totalTrades, true)}
-            ${metricCard('Avg Winner', '+' + m.avgWinner + '%', true)}
-            ${metricCard('Avg Loser', m.avgLoser + '%', false)}
-            ${metricCard('Profit Factor', m.profitFactor, (m.profitFactor || 0) >= 1)}
-            ${metricCard('Avg Hold', m.avgHoldDays + 'd', true)}
-        </div>`;
-
-        // Equity curve chart
-        html += `<div class="charts-row">
-            <div class="chart-box full-width"><h3>Equity Curve</h3><canvas id="equity-chart"></canvas></div>
-        </div>`;
-
-        // Regime performance
-        if (m.byRegime && Object.keys(m.byRegime).length > 0) {
-            html += `<h3 class="section-header">Regime Performance</h3><div class="regime-grid">`;
-            for (const [regime, d] of Object.entries(m.byRegime)) {
-                const badgeClass = regime === 'bull' ? 'badge-bull' : regime === 'bear' ? 'badge-bear' : 'badge-choppy';
-                html += `<div class="metric-card">
-                    <div class="label"><span class="badge ${badgeClass}">${regime}</span></div>
-                    <div class="value">${d.trades} trades</div>
-                    <div class="sub">${d.winRate}% win rate &middot; ${d.totalPL >= 0 ? '+' : ''}$${d.totalPL.toLocaleString()}</div>
-                </div>`;
-            }
-            html += `</div>`;
-        }
-
-        // Exit reasons
-        if (m.exitReasons && Object.keys(m.exitReasons).length > 0) {
-            html += `<h3 class="section-header">Exit Reasons</h3>`;
-            const maxCount = Math.max(...Object.values(m.exitReasons));
-            for (const [reason, count] of Object.entries(m.exitReasons)) {
-                const pct = m.totalTrades > 0 ? ((count / m.totalTrades) * 100).toFixed(1) : '0';
-                const width = maxCount > 0 ? (count / maxCount * 100) : 0;
-                html += `<div class="exit-bar">
-                    <span class="exit-bar-label">${reason}</span>
-                    <div class="exit-bar-fill" style="width:${width}%"></div>
-                    <span class="exit-bar-count">${count} (${pct}%)</span>
-                </div>`;
-            }
-        }
-
-        // Trade log
-        if (trades.length > 0) {
-            html += `<h3 class="section-header">Trade Log (${trades.length} trades)</h3>`;
-            html += `<div class="filters">
-                <select id="filter-exit" onchange="filterTrades()">
-                    <option value="">All exits</option>
-                    ${[...new Set(trades.map(t => t.exitReason))].map(r => `<option value="${r}">${r}</option>`).join('')}
-                </select>
-                <select id="filter-result" onchange="filterTrades()">
-                    <option value="">All results</option>
-                    <option value="win">Winners</option>
-                    <option value="loss">Losers</option>
-                </select>
-            </div>`;
-            html += `<div class="table-section"><div class="table-wrap">
-                <table class="data-table" id="trade-table">
-                    <thead><tr>
-                        <th>Symbol</th><th>Sector</th><th>Buy</th><th>Sell</th>
-                        <th>Return</th><th>P&L</th><th>Hold</th><th>Exit</th><th>Regime</th>
-                    </tr></thead>
-                    <tbody>${trades.map((t, idx) => {
-                        const retClass = (t.returnPercent || 0) >= 0 ? 'positive' : 'negative';
-                        const hasAttr = t.entryBreakdown || t.exitBreakdown;
-                        return `<tr data-exit="${t.exitReason || ''}" data-result="${(t.profitLoss || 0) >= 0 ? 'win' : 'loss'}" ${hasAttr ? `class="clickable" onclick="toggleAttribution(${idx})"` : ''}>
-                            <td><strong>${t.symbol}</strong>${hasAttr ? ' <span style="color:var(--text-muted);font-size:9px">▸</span>' : ''}</td>
-                            <td style="color:var(--text-muted)">${t.sector || '?'}</td>
-                            <td>$${t.buyPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.buyDate?.split('T')[0] || '?'}</span></td>
-                            <td>$${t.sellPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.sellDate?.split('T')[0] || '?'}</span></td>
-                            <td class="${retClass}">${fmtSign(t.returnPercent, '%')}</td>
-                            <td class="${retClass}">${t.profitLoss >= 0 ? '+' : ''}$${t.profitLoss?.toFixed(2) || '0'}</td>
-                            <td>${t.holdTimeDays ?? '?'}d</td>
-                            <td>${t.exitReason || '?'}</td>
-                            <td>${t.entryRegime || '?'}</td>
-                        </tr>
-                        ${hasAttr ? `<tr class="attr-row" id="attr-${idx}" style="display:none"><td colspan="9">${renderAttribution(t)}</td></tr>` : ''}`;
-                    }).join('')}</tbody>
-                </table>
-            </div></div>`;
-        }
-
-        el.innerHTML = html;
-        showView('detail');
-
-        // Draw equity curve
-        if (m.equityCurve?.length > 0) {
-            drawEquityCurve('equity-chart', m.equityCurve, m.initialBalance);
-        }
-
-    } catch (err) {
-        el.innerHTML = `<p>Error: ${err.message}</p>`;
-        showView('detail');
-    }
-}
-
-function toggleAttribution(idx) {
-    const row = document.getElementById('attr-' + idx);
-    if (row) row.style.display = row.style.display === 'none' ? '' : 'none';
-}
-
-function filterTrades() {
-    const exitFilter = document.getElementById('filter-exit')?.value || '';
-    const resultFilter = document.getElementById('filter-result')?.value || '';
-    const rows = document.querySelectorAll('#trade-table tbody tr');
-    rows.forEach(row => {
-        const matchExit = !exitFilter || row.dataset.exit === exitFilter;
-        const matchResult = !resultFilter || row.dataset.result === resultFilter;
-        row.style.display = matchExit && matchResult ? '' : 'none';
-    });
-}
-
-// ═══════════════════════════════════════════════════
-// Comparison — all strategies side by side
-// ═══════════════════════════════════════════════════
-
-async function loadComparison() {
-    const el = document.getElementById('comparison-content');
-    try {
-        const resp = await fetch('/api/comparison');
-        const { results } = await resp.json();
-
-        if (!results || results.length === 0) {
-            el.innerHTML = `<div class="empty-state">
-                <h2>No results to compare</h2>
-                <p>Run multiple strategies to see a comparison</p>
-                <code>node backtest.js --all</code>
-            </div>`;
-            return;
-        }
-
-        // Comparison table
-        const metrics = [
-            { key: 'totalReturn', label: 'Return', fmt: v => fmtSign(v, '%'), higher: true },
-            { key: 'sharpe', label: 'Sharpe', fmt: v => v ?? 'N/A', higher: true },
-            { key: 'winRate', label: 'Win Rate', fmt: v => fmt(v, '%'), higher: true },
-            { key: 'totalTrades', label: 'Trades', fmt: v => v, higher: false },
-            { key: 'maxDrawdown', label: 'Max DD', fmt: v => '-' + v + '%', higher: false },
-            { key: 'profitFactor', label: 'Profit Factor', fmt: v => v ?? 'N/A', higher: true },
-            { key: 'spyReturn', label: 'SPY Return', fmt: v => fmtSign(v, '%'), higher: false },
-        ];
-
-        let html = `<div class="table-section"><table class="compare-table">
-            <thead><tr><th>Metric</th>${results.map(r => `<th>${r.strategy}</th>`).join('')}</tr></thead>
-            <tbody>`;
-
-        for (const m of metrics) {
-            const vals = results.map(r => r[m.key]);
-            const bestIdx = m.higher ? indexOfMax(vals) : indexOfMin(vals);
-            html += `<tr><td style="color:var(--text-muted)">${m.label}</td>`;
-            results.forEach((r, i) => {
-                const isBest = i === bestIdx && results.length > 1 && m.key !== 'spyReturn';
-                html += `<td class="${isBest ? 'best' : ''}">${m.fmt(r[m.key])}</td>`;
+        // Sort: all-profitable first, then by profitable count, then avg return
+        const sorted = Object.entries(strategies)
+            .filter(([_, s]) => s.periodsCount > 1)
+            .sort((a, b) => {
+                if (b[1].allProfitable !== a[1].allProfitable) return b[1].allProfitable ? 1 : -1;
+                if (b[1].profitableCount !== a[1].profitableCount) return b[1].profitableCount - a[1].profitableCount;
+                return b[1].avgReturn - a[1].avgReturn;
             });
-            html += `</tr>`;
-        }
-        html += `</tbody></table></div>`;
 
-        // Equity curve overlay
-        const curvesExist = results.some(r => r.equityCurve?.length > 0);
-        if (curvesExist) {
-            html += `<div class="chart-box"><h3>Equity Curves — All Strategies</h3><canvas id="compare-chart"></canvas></div>`;
+        if (sorted.length === 0) {
+            container.innerHTML = '<p class="empty">Need results across multiple time periods. Run backtests with different --start dates.</p>';
+            return;
         }
 
-        el.innerHTML = html;
+        // Find which periods actually have data
+        const activePeriods = periods.filter(p =>
+            sorted.some(([_, s]) => s.periods[p])
+        );
 
-        if (curvesExist) {
-            drawComparisonChart('compare-chart', results);
+        let html = '<h2>Cross-Timeframe Consistency</h2>';
+        html += '<p class="subtitle">Strategies profitable across all tested periods are the most reliable signals.</p>';
+
+        html += '<div class="matrix-wrap"><table class="consistency-table"><thead><tr>';
+        html += '<th>Strategy</th>';
+        for (const p of activePeriods) html += `<th colspan="2">${p}</th>`;
+        html += '<th>Status</th>';
+        html += '</tr><tr><th></th>';
+        for (const p of activePeriods) html += '<th class="sub-header">Return</th><th class="sub-header">WR</th>';
+        html += '<th></th></tr></thead><tbody>';
+
+        for (const [name, s] of sorted) {
+            const rowClass = s.allProfitable ? 'consistent-row' : s.profitableCount === 0 ? 'bad-row' : '';
+            html += `<tr class="${rowClass}">`;
+            html += `<td class="strategy-name">${name}</td>`;
+            for (const p of activePeriods) {
+                const d = s.periods[p];
+                if (!d) {
+                    html += '<td class="no-data">-</td><td class="no-data">-</td>';
+                } else {
+                    const retClass = d.totalReturn >= 0 ? 'positive' : 'negative';
+                    html += `<td class="${retClass}">${d.totalReturn >= 0 ? '+' : ''}${d.totalReturn.toFixed(1)}%</td>`;
+                    html += `<td>${d.winRate.toFixed(0)}%</td>`;
+                }
+            }
+            // Status badge
+            if (s.allProfitable) {
+                html += '<td><span class="badge badge-green">ALL PROFIT</span></td>';
+            } else if (s.profitableCount > 0) {
+                html += `<td><span class="badge badge-gray">${s.profitableCount}/${s.periodsCount}</span></td>`;
+            } else {
+                html += '<td><span class="badge badge-red">NONE</span></td>';
+            }
+            html += '</tr>';
         }
 
+        html += '</tbody></table></div>';
+
+        // Summary cards for all-profitable strategies
+        const winners = sorted.filter(([_, s]) => s.allProfitable);
+        if (winners.length > 0) {
+            html += '<h3>Durable Strategies (profitable in every period)</h3>';
+            html += '<div class="signal-cards">';
+            for (const [name, s] of winners) {
+                html += '<div class="signal-card consistent">';
+                html += `<h3>${name}</h3>`;
+                for (const p of activePeriods) {
+                    const d = s.periods[p];
+                    if (!d) continue;
+                    html += `<div class="stat"><span>${p}:</span> ${d.totalReturn >= 0 ? '+' : ''}${d.totalReturn.toFixed(1)}% (${d.trades} trades, ${d.winRate.toFixed(0)}% WR, PF ${d.profitFactor.toFixed(1)})</div>`;
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+
+        container.innerHTML = html;
     } catch (err) {
-        el.innerHTML = `<div class="empty-state"><h2>Error</h2><p>${err.message}</p></div>`;
+        container.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
     }
 }
 
 // ═══════════════════════════════════════════════════
-// My Trades — APEX live trade comparison
+// Matrix Heatmap
+// ═══════════════════════════════════════════════════
+
+async function loadMatrix() {
+    const container = document.getElementById('matrix-content');
+    try {
+        const res = await fetch('/api/matrix');
+        if (!res.ok) {
+            container.innerHTML = '<p class="empty">No matrix results yet. Run: <code>node backtest.js --matrix</code></p>';
+            return;
+        }
+        matrixData = await res.json();
+        renderMatrix();
+    } catch (err) {
+        container.innerHTML = `<p class="error">Failed to load matrix: ${err.message}</p>`;
+    }
+}
+
+function renderMatrix() {
+    if (!matrixData || !matrixData.grid) return;
+    const container = document.getElementById('matrix-content');
+    const metric = document.getElementById('matrix-metric').value;
+    const grid = matrixData.grid;
+    const signals = Object.keys(grid);
+    if (signals.length === 0) {
+        container.innerHTML = '<p class="empty">No data in matrix.</p>';
+        return;
+    }
+
+    // Collect all exits across all signals
+    const exitSet = new Set();
+    for (const sig of signals) {
+        for (const exit of Object.keys(grid[sig])) exitSet.add(exit);
+    }
+    const exits = [...exitSet].sort();
+
+    // Find min/max for color scaling
+    let allValues = [];
+    for (const sig of signals) {
+        for (const exit of exits) {
+            const cell = grid[sig]?.[exit];
+            if (!cell) continue;
+            for (const w of Object.keys(cell)) {
+                const val = cell[w][metric];
+                if (val != null && isFinite(val)) allValues.push(val);
+            }
+        }
+    }
+    const minVal = Math.min(...allValues);
+    const maxVal = Math.max(...allValues);
+
+    // Build table
+    let html = '<div class="matrix-wrap"><table class="matrix-table"><thead><tr><th>Signal</th>';
+    for (const exit of exits) html += `<th>${exit}</th>`;
+    html += '</tr></thead><tbody>';
+
+    for (const sig of signals) {
+        const isBaseline = sig === 'NOSIGNAL';
+        html += `<tr class="${isBaseline ? 'baseline-row' : ''}"><td class="signal-name">${sig}</td>`;
+        for (const exit of exits) {
+            const cell = grid[sig]?.[exit];
+            if (!cell) { html += '<td class="no-data">-</td>'; continue; }
+            // Use first available weight set
+            const wKey = Object.keys(cell)[0];
+            const data = cell[wKey];
+            const val = data[metric];
+            const color = cellColor(val, minVal, maxVal, metric);
+            const alpha = data.vsBaseline ? ` (${data.vsBaseline.returnDelta >= 0 ? '+' : ''}${data.vsBaseline.returnDelta}%)` : '';
+            html += `<td class="matrix-cell" style="background:${color}" onclick="loadDetail('${sig}_${exit}_${wKey}')" title="${sig}/${exit}: ${metric}=${val}${alpha}">${formatVal(val, metric)}</td>`;
+        }
+        html += '</tr>';
+    }
+    html += '</tbody></table></div>';
+
+    // Best combos
+    if (matrixData.best) {
+        html += '<div class="best-combos">';
+        if (matrixData.best.byReturn) html += `<div class="best"><strong>Best Return:</strong> ${matrixData.best.byReturn.signal}/${matrixData.best.byReturn.exit} (${matrixData.best.byReturn.value >= 0 ? '+' : ''}${matrixData.best.byReturn.value}%)</div>`;
+        if (matrixData.best.byWinRate) html += `<div class="best"><strong>Best Win Rate:</strong> ${matrixData.best.byWinRate.signal}/${matrixData.best.byWinRate.exit} (${matrixData.best.byWinRate.value}%)</div>`;
+        if (matrixData.best.bySharpe) html += `<div class="best"><strong>Best Sharpe:</strong> ${matrixData.best.bySharpe.signal}/${matrixData.best.bySharpe.exit} (${matrixData.best.bySharpe.value})</div>`;
+        html += '</div>';
+    }
+
+    container.innerHTML = html;
+}
+
+function cellColor(val, min, max, metric) {
+    if (val == null || !isFinite(val)) return 'rgba(100,100,100,0.2)';
+    const isReversed = metric === 'maxDrawdown'; // Lower is better for drawdown
+    let ratio = max !== min ? (val - min) / (max - min) : 0.5;
+    if (isReversed) ratio = 1 - ratio;
+    // Green for good, red for bad
+    const r = Math.round(255 * (1 - ratio));
+    const g = Math.round(255 * ratio);
+    return `rgba(${r},${g},80,0.35)`;
+}
+
+function formatVal(val, metric) {
+    if (val == null || !isFinite(val)) return '-';
+    if (metric === 'winRate' || metric === 'totalReturn' || metric === 'maxDrawdown') return val.toFixed(1) + '%';
+    if (metric === 'sharpe') return val.toFixed(2);
+    return val.toFixed(1);
+}
+
+document.getElementById('matrix-metric')?.addEventListener('change', renderMatrix);
+
+// ═══════════════════════════════════════════════════
+// Signal Accuracy
+// ═══════════════════════════════════════════════════
+
+async function loadSignalAccuracy() {
+    const container = document.getElementById('signals-content');
+    // Load all results and aggregate signal accuracy
+    try {
+        const res = await fetch('/api/results');
+        const { results } = await res.json();
+        if (!results || results.length === 0) {
+            container.innerHTML = '<p class="empty">No results yet.</p>';
+            return;
+        }
+
+        // Load full data for each result to get signal accuracy
+        const allAccuracy = {};
+        for (const r of results.slice(0, 20)) { // Limit to 20 most recent
+            try {
+                const full = await (await fetch(`/api/result/${r.filename}`)).json();
+                const sa = full.metrics?.signalAccuracy;
+                if (!sa) continue;
+                for (const [sig, data] of Object.entries(sa)) {
+                    if (!allAccuracy[sig]) allAccuracy[sig] = { trades: 0, wins: 0, totalReturn: 0, byQuality: {} };
+                    allAccuracy[sig].trades += data.trades;
+                    allAccuracy[sig].wins += data.wins;
+                    allAccuracy[sig].totalReturn += data.avgReturn * data.trades;
+                    for (const [q, qd] of Object.entries(data.byQuality || {})) {
+                        if (!allAccuracy[sig].byQuality[q]) allAccuracy[sig].byQuality[q] = { trades: 0, wins: 0 };
+                        allAccuracy[sig].byQuality[q].trades += qd.trades;
+                        allAccuracy[sig].byQuality[q].wins += qd.wins;
+                    }
+                }
+            } catch { /* skip */ }
+        }
+
+        let html = '<h2>Signal Accuracy (Aggregated)</h2><div class="signal-cards">';
+        for (const [sig, data] of Object.entries(allAccuracy)) {
+            const winRate = data.trades > 0 ? (data.wins / data.trades * 100).toFixed(1) : '0';
+            const avgReturn = data.trades > 0 ? (data.totalReturn / data.trades).toFixed(1) : '0';
+            html += `<div class="signal-card ${sig === 'NOSIGNAL' ? 'baseline' : ''}">
+                <h3>${sig}</h3>
+                <div class="stat"><span>Trades:</span> ${data.trades}</div>
+                <div class="stat"><span>Win Rate:</span> ${winRate}%</div>
+                <div class="stat"><span>Avg Return:</span> ${avgReturn}%</div>`;
+            if (Object.keys(data.byQuality).length > 0) {
+                html += '<div class="quality-breakdown"><h4>By Quality:</h4>';
+                for (const q of ['full', 'strong', 'partial', 'none']) {
+                    const qd = data.byQuality[q];
+                    if (!qd || qd.trades === 0) continue;
+                    const qWR = (qd.wins / qd.trades * 100).toFixed(0);
+                    html += `<div class="quality-row"><span>${q}:</span> ${qd.trades} trades, ${qWR}% WR</div>`;
+                }
+                html += '</div>';
+            }
+            html += '</div>';
+        }
+        html += '</div>';
+        container.innerHTML = html;
+    } catch (err) {
+        container.innerHTML = `<p class="error">Failed to load signal accuracy: ${err.message}</p>`;
+    }
+}
+
+// ═══════════════════════════════════════════════════
+// Strategy Detail
+// ═══════════════════════════════════════════════════
+
+async function loadDetail(strategyName) {
+    const tab = document.getElementById('detail-tab');
+    tab.style.display = 'inline-block';
+    tab.textContent = strategyName;
+    showView('detail');
+
+    const container = document.getElementById('detail-content');
+    container.innerHTML = '<p>Loading...</p>';
+
+    try {
+        const res = await fetch('/api/results');
+        const { results } = await res.json();
+        // Find matching result file
+        const match = results.find(r => r.strategy === strategyName || r.filename.startsWith(strategyName));
+        if (!match) {
+            container.innerHTML = `<p class="error">Result not found for ${strategyName}</p>`;
+            return;
+        }
+        const full = await (await fetch(`/api/result/${match.filename}`)).json();
+        renderDetail(full, container);
+    } catch (err) {
+        container.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
+    }
+}
+
+function renderDetail(data, container) {
+    const m = data.metrics || {};
+    let html = `<h2>${data.strategy}</h2>`;
+    html += '<div class="metrics-grid">';
+    html += metricCard('Return', `${m.totalReturn >= 0 ? '+' : ''}${m.totalReturn}%`);
+    html += metricCard('Sharpe', m.sharpe ?? 'N/A');
+    html += metricCard('Win Rate', `${m.winRate}%`);
+    html += metricCard('Trades', m.totalTrades);
+    html += metricCard('Max DD', `-${m.maxDrawdown}%`);
+    html += metricCard('Profit Factor', m.profitFactor);
+    html += metricCard('Avg Hold', `${m.avgHoldDays}d`);
+    html += metricCard('SPY Return', m.spyReturn != null ? `${m.spyReturn}%` : 'N/A');
+    html += '</div>';
+
+    // Equity curve
+    if (m.equityCurve?.length > 0) {
+        html += '<div class="chart-container"><canvas id="detail-chart"></canvas></div>';
+    }
+
+    // Exit reasons
+    if (m.exitReasons) {
+        html += '<h3>Exit Reasons</h3><div class="exit-reasons">';
+        for (const [reason, count] of Object.entries(m.exitReasons)) {
+            const pct = m.totalTrades > 0 ? (count / m.totalTrades * 100).toFixed(1) : 0;
+            html += `<div class="exit-row"><span>${reason}</span> ${count} (${pct}%)</div>`;
+        }
+        html += '</div>';
+    }
+
+    // Signal accuracy
+    if (m.signalAccuracy && Object.keys(m.signalAccuracy).length > 0) {
+        html += '<h3>Signal Accuracy</h3><div class="signal-table">';
+        for (const [sig, s] of Object.entries(m.signalAccuracy)) {
+            html += `<div class="sig-row"><strong>${sig}</strong>: ${s.trades} trades, ${s.winRate}% WR, avg ${s.avgReturn >= 0 ? '+' : ''}${s.avgReturn}%</div>`;
+        }
+        html += '</div>';
+    }
+
+    // Trade log
+    if (data.portfolio?.closedTrades?.length > 0) {
+        html += '<h3>Trade Log</h3><div class="trade-log"><table><thead><tr><th>Symbol</th><th>Signal</th><th>Quality</th><th>Buy</th><th>Sell</th><th>Return</th><th>Hold</th><th>Exit</th></tr></thead><tbody>';
+        for (const t of data.portfolio.closedTrades) {
+            const cls = t.profitLoss >= 0 ? 'win' : 'loss';
+            html += `<tr class="${cls}"><td>${t.symbol}</td><td>${t.signalCode || '-'}</td><td>${t.signalQuality || '-'}</td><td>$${t.buyPrice?.toFixed(2)}</td><td>$${t.sellPrice?.toFixed(2)}</td><td>${t.returnPercent >= 0 ? '+' : ''}${t.returnPercent?.toFixed(1)}%</td><td>${t.holdTimeDays}d</td><td>${t.exitReason || '-'}</td></tr>`;
+        }
+        html += '</tbody></table></div>';
+    }
+
+    container.innerHTML = html;
+
+    // Render chart
+    if (m.equityCurve?.length > 0) {
+        if (chartInstances.detail) chartInstances.detail.destroy();
+        const ctx = document.getElementById('detail-chart').getContext('2d');
+        chartInstances.detail = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: m.equityCurve.map(p => p.date),
+                datasets: [{ label: 'Portfolio', data: m.equityCurve.map(p => p.value), borderColor: '#3b82f6', tension: 0.1, pointRadius: 0 }]
+            },
+            options: { responsive: true, plugins: { legend: { display: false } }, scales: { x: { display: false } } }
+        });
+    }
+}
+
+function metricCard(label, value) {
+    return `<div class="metric-card"><div class="metric-label">${label}</div><div class="metric-value">${value}</div></div>`;
+}
+
+// ═══════════════════════════════════════════════════
+// All Results
+// ═══════════════════════════════════════════════════
+
+async function loadResults() {
+    const container = document.getElementById('results-list');
+    try {
+        const res = await fetch('/api/results');
+        const { results } = await res.json();
+        if (!results || results.length === 0) {
+            container.innerHTML = '<p class="empty">No results. Run a backtest first.</p>';
+            return;
+        }
+        let html = '<table class="results-table"><thead><tr><th>Strategy</th><th>Return</th><th>Sharpe</th><th>Win%</th><th>Trades</th><th>Max DD</th><th>PF</th></tr></thead><tbody>';
+        for (const r of results) {
+            if (r.error) continue;
+            html += `<tr onclick="loadDetail('${r.strategy}')"><td>${r.strategy}</td><td>${r.totalReturn >= 0 ? '+' : ''}${r.totalReturn}%</td><td>${r.sharpe ?? '-'}</td><td>${r.winRate}%</td><td>${r.totalTrades}</td><td>-${r.maxDrawdown}%</td><td>${r.profitFactor}</td></tr>`;
+        }
+        html += '</tbody></table>';
+        container.innerHTML = html;
+    } catch (err) {
+        container.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
+    }
+}
+
+// ═══════════════════════════════════════════════════
+// My Trades
 // ═══════════════════════════════════════════════════
 
 async function loadMyTrades() {
-    const el = document.getElementById('mytrades-content');
+    const container = document.getElementById('mytrades-content');
     try {
-        const [myResp, compResp] = await Promise.all([
-            fetch('/api/my-trades'),
-            fetch('/api/comparison'),
-        ]);
-        const myData = await myResp.json();
-        const compData = await compResp.json();
-
-        if (myData.error) {
-            el.innerHTML = `<div class="empty-state"><h2>APEX Portfolio Not Found</h2><p>${myData.error}</p></div>`;
+        const res = await fetch('/api/my-trades');
+        if (!res.ok) {
+            container.innerHTML = '<p class="empty">APEX portfolio not available.</p>';
+            return;
+        }
+        const data = await res.json();
+        if (data.error) {
+            container.innerHTML = `<p class="error">${data.error}</p>`;
             return;
         }
 
-        const m = myData.metrics;
-        const closed = myData.closedTrades || [];
-        const benchmarks = compData.results || [];
+        const m = data.metrics;
+        let html = '<h2>My APEX Trades</h2>';
+        html += '<div class="metrics-grid">';
+        html += metricCard('Trades', m.totalTrades);
+        html += metricCard('Open', m.openPositions);
+        html += metricCard('Total P&L', `$${m.totalPL?.toLocaleString()}`);
+        html += metricCard('Win Rate', `${m.winRate}%`);
+        html += metricCard('Avg Winner', `+${m.avgWinner}%`);
+        html += metricCard('Avg Loser', `${m.avgLoser}%`);
+        html += metricCard('Profit Factor', m.profitFactor ?? 'N/A');
+        html += metricCard('Avg Hold', `${m.avgHoldDays}d`);
+        html += '</div>';
 
-        let html = `<h2 style="margin-bottom:8px">My Trades vs Benchmarks</h2>
-            <p style="color:var(--text-muted);margin-bottom:16px">${myData.firstDate || '?'} &rarr; ${myData.lastDate || '?'} &middot; ${m.totalTrades} closed trades &middot; ${m.openPositions} open positions</p>`;
-
-        // Metrics cards
-        html += `<div class="metrics-grid">
-            ${metricCard('Closed P&L', (m.totalPL >= 0 ? '+$' : '-$') + Math.abs(m.totalPL).toLocaleString(), m.totalPL >= 0)}
-            ${metricCard('Win Rate', fmt(m.winRate, '%'), m.winRate >= 50)}
-            ${metricCard('Avg Winner', '+' + m.avgWinner + '%', true)}
-            ${metricCard('Avg Loser', m.avgLoser + '%', false)}
-            ${metricCard('Profit Factor', m.profitFactor ?? 'N/A', (m.profitFactor || 0) >= 1)}
-            ${metricCard('Avg Hold', m.avgHoldDays + 'd', true)}
-        </div>`;
-
-        // Comparison table: my trades vs each benchmark (over overlapping period only)
-        if (benchmarks.length > 0) {
-            html += `<h3 class="section-header">Benchmark Comparison</h3>`;
-            html += `<div class="table-section"><table class="compare-table">
-                <thead><tr><th>Metric</th><th>My Trades</th>${benchmarks.map(b => `<th>${b.strategy}</th>`).join('')}</tr></thead>
-                <tbody>
-                    <tr><td style="color:var(--text-muted)">Win Rate</td><td>${fmt(m.winRate, '%')}</td>${benchmarks.map(b => `<td>${fmt(b.winRate, '%')}</td>`).join('')}</tr>
-                    <tr><td style="color:var(--text-muted)">Profit Factor</td><td>${m.profitFactor ?? 'N/A'}</td>${benchmarks.map(b => `<td>${b.profitFactor ?? 'N/A'}</td>`).join('')}</tr>
-                    <tr><td style="color:var(--text-muted)">Total Trades</td><td>${m.totalTrades}</td>${benchmarks.map(b => `<td>${b.totalTrades ?? 0}</td>`).join('')}</tr>
-                    <tr><td style="color:var(--text-muted)">Avg Winner</td><td>+${m.avgWinner}%</td>${benchmarks.map(b => `<td>—</td>`).join('')}</tr>
-                    <tr><td style="color:var(--text-muted)">Avg Loser</td><td>${m.avgLoser}%</td>${benchmarks.map(b => `<td>—</td>`).join('')}</tr>
-                </tbody>
-            </table></div>`;
-        }
-
-        // Trade log with attribution
-        if (closed.length > 0) {
-            html += `<h3 class="section-header">Closed Trades (${closed.length})</h3>`;
-            html += `<div class="table-section"><div class="table-wrap">
-                <table class="data-table">
-                    <thead><tr>
-                        <th>Symbol</th><th>Buy</th><th>Sell</th>
-                        <th>Return</th><th>P&L</th><th>Hold</th><th>Exit</th>
-                    </tr></thead>
-                    <tbody>${closed.map(t => {
-                        const retClass = (t.returnPercent || 0) >= 0 ? 'positive' : 'negative';
-                        const holdDays = t.holdTime ? Math.round(t.holdTime / 86400000 * 10) / 10 : '?';
-                        return `<tr>
-                            <td><strong>${t.symbol}</strong></td>
-                            <td>$${t.buyPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.buyDate?.split('T')[0] || '?'}</span></td>
-                            <td>$${t.sellPrice?.toFixed(2) || '?'}<br><span style="color:var(--text-muted);font-size:10px">${t.sellDate?.split('T')[0] || '?'}</span></td>
-                            <td class="${retClass}">${fmtSign(Math.round(t.returnPercent * 100) / 100, '%')}</td>
-                            <td class="${retClass}">${t.profitLoss >= 0 ? '+' : ''}$${t.profitLoss?.toFixed(2) || '0'}</td>
-                            <td>${holdDays}d</td>
-                            <td>${t.exitReason || '?'}</td>
-                        </tr>`;
-                    }).join('')}</tbody>
-                </table>
-            </div></div>`;
-        }
-
-        // Open positions
-        const holdingSymbols = Object.keys(myData.holdings || {});
-        if (holdingSymbols.length > 0) {
-            html += `<h3 class="section-header">Open Positions (${holdingSymbols.length})</h3>`;
-            html += `<div class="metrics-grid">`;
-            for (const sym of holdingSymbols) {
-                const shares = myData.holdings[sym];
-                html += `<div class="metric-card"><div class="label">${sym}</div><div class="value">${shares} shares</div></div>`;
+        if (data.closedTrades?.length > 0) {
+            html += '<h3>Closed Trades</h3><table class="results-table"><thead><tr><th>Symbol</th><th>Buy</th><th>Sell</th><th>Return</th><th>P&L</th><th>Days</th><th>Exit</th></tr></thead><tbody>';
+            for (const t of data.closedTrades.slice().reverse()) {
+                const cls = (t.profitLoss || 0) >= 0 ? 'win' : 'loss';
+                html += `<tr class="${cls}"><td>${t.symbol}</td><td>$${t.buyPrice?.toFixed(2)}</td><td>$${t.sellPrice?.toFixed(2)}</td><td>${t.returnPercent >= 0 ? '+' : ''}${t.returnPercent?.toFixed(1)}%</td><td>${t.profitLoss >= 0 ? '+' : ''}$${t.profitLoss?.toFixed(0)}</td><td>${t.holdTimeDays || '-'}</td><td>${t.exitReason || '-'}</td></tr>`;
             }
-            html += `</div>`;
+            html += '</tbody></table>';
         }
 
-        el.innerHTML = html;
+        container.innerHTML = html;
     } catch (err) {
-        el.innerHTML = `<div class="empty-state"><h2>Error</h2><p>${err.message}</p></div>`;
+        container.innerHTML = `<p class="error">Failed: ${err.message}</p>`;
     }
-}
-
-// ═══════════════════════════════════════════════════
-// Attribution — score breakdown display for FORGE trades
-// ═══════════════════════════════════════════════════
-
-function renderAttribution(trade) {
-    if (!trade.entryBreakdown && !trade.exitBreakdown) return '';
-
-    const keys = [
-        { key: 'momentumContrib', label: 'Momentum' },
-        { key: 'rsContrib', label: 'Rel Strength' },
-        { key: 'structureBonus', label: 'Structure' },
-        { key: 'sectorBonus', label: 'Sector' },
-        { key: 'smaProximityBonus', label: 'SMA Prox' },
-        { key: 'smaCrossoverBonus', label: 'SMA Cross' },
-        { key: 'accelBonus', label: 'Accel' },
-        { key: 'consistencyBonus', label: 'Consistency' },
-        { key: 'macdBonus', label: 'MACD' },
-        { key: 'extensionPenalty', label: 'Extension' },
-        { key: 'pullbackBonus', label: 'Pullback' },
-        { key: 'rsiBonusPenalty', label: 'RSI' },
-        { key: 'entryMultiplier', label: 'Entry Mult' },
-    ];
-
-    const entry = trade.entryBreakdown || {};
-    const exit = trade.exitBreakdown || {};
-    const delta = trade.breakdownDelta || {};
-
-    let rows = '';
-    for (const { key, label } of keys) {
-        const eVal = entry[key] ?? '—';
-        const xVal = exit[key] ?? '—';
-        const dVal = delta[key];
-        const dStr = dVal != null ? (dVal >= 0 ? '+' : '') + dVal.toFixed(2) : '—';
-        const dClass = dVal > 0 ? 'positive' : dVal < 0 ? 'negative' : '';
-        // Skip rows where both entry and exit are 0 or null
-        if ((entry[key] ?? 0) === 0 && (exit[key] ?? 0) === 0) continue;
-        rows += `<tr><td style="color:var(--text-muted)">${label}</td><td>${typeof eVal === 'number' ? eVal.toFixed(2) : eVal}</td><td>${typeof xVal === 'number' ? xVal.toFixed(2) : xVal}</td><td class="${dClass}">${dStr}</td></tr>`;
-    }
-
-    if (!rows) return '';
-    return `<div class="attribution-table">
-        <table class="data-table" style="font-size:11px">
-            <thead><tr><th>Signal</th><th>Entry</th><th>Exit</th><th>Delta</th></tr></thead>
-            <tbody>
-                <tr style="font-weight:bold"><td>Composite</td><td>${trade.entryCompositeScore?.toFixed(1) ?? '—'}</td><td>${trade.exitCompositeScore?.toFixed(1) ?? '—'}</td><td class="${(trade.exitCompositeScore - trade.entryCompositeScore) >= 0 ? 'positive' : 'negative'}">${trade.entryCompositeScore != null && trade.exitCompositeScore != null ? fmtSign(Math.round((trade.exitCompositeScore - trade.entryCompositeScore) * 10) / 10, '') : '—'}</td></tr>
-                ${rows}
-            </tbody>
-        </table>
-    </div>`;
-}
-
-// ═══════════════════════════════════════════════════
-// Charts
-// ═══════════════════════════════════════════════════
-
-function drawEquityCurve(canvasId, equityCurve, initialBalance) {
-    destroyChart(canvasId);
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-
-    const labels = equityCurve.map(p => p.date);
-    const values = equityCurve.map(p => p.value);
-
-    chartInstances[canvasId] = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels,
-            datasets: [{
-                label: 'Portfolio Value',
-                data: values,
-                borderColor: '#3b82f6',
-                backgroundColor: 'rgba(59, 130, 246, 0.1)',
-                fill: true,
-                tension: 0.1,
-                pointRadius: 0,
-                borderWidth: 2,
-            }, {
-                label: 'Initial Balance',
-                data: labels.map(() => initialBalance),
-                borderColor: '#4b5563',
-                borderDash: [5, 5],
-                pointRadius: 0,
-                borderWidth: 1,
-            }],
-        },
-        options: chartOptions('$'),
-    });
-}
-
-function drawComparisonChart(canvasId, results) {
-    destroyChart(canvasId);
-    const ctx = document.getElementById(canvasId);
-    if (!ctx) return;
-
-    // Normalize all to % return from start
-    const datasets = results
-        .filter(r => r.equityCurve?.length > 0)
-        .map((r, i) => {
-            const initial = r.equityCurve[0]?.value || 1;
-            return {
-                label: r.strategy,
-                data: r.equityCurve.map(p => ((p.value - initial) / initial * 100)),
-                borderColor: COLORS[i % COLORS.length],
-                tension: 0.1,
-                pointRadius: 0,
-                borderWidth: 2,
-            };
-        });
-
-    // Use the longest curve's dates as labels
-    const longest = results.reduce((a, b) => (a.equityCurve?.length || 0) > (b.equityCurve?.length || 0) ? a : b);
-    const labels = (longest.equityCurve || []).map(p => p.date);
-
-    chartInstances[canvasId] = new Chart(ctx, {
-        type: 'line',
-        data: { labels, datasets },
-        options: chartOptions('%'),
-    });
-}
-
-function chartOptions(suffix) {
-    return {
-        responsive: true,
-        maintainAspectRatio: false,
-        interaction: { intersect: false, mode: 'index' },
-        scales: {
-            x: {
-                ticks: { color: '#5a5e72', maxTicksLimit: 12, font: { size: 10 } },
-                grid: { color: '#1a1d27' },
-            },
-            y: {
-                ticks: {
-                    color: '#5a5e72',
-                    font: { size: 10 },
-                    callback: v => suffix === '$' ? '$' + v.toLocaleString() : v.toFixed(1) + '%',
-                },
-                grid: { color: '#1a1d27' },
-            },
-        },
-        plugins: {
-            legend: { labels: { color: '#8b8fa3', font: { size: 11 } } },
-            tooltip: {
-                backgroundColor: '#1a1d27',
-                borderColor: '#2a2e3f',
-                borderWidth: 1,
-                titleColor: '#e4e6ed',
-                bodyColor: '#8b8fa3',
-            },
-        },
-    };
-}
-
-function destroyChart(id) {
-    if (chartInstances[id]) {
-        chartInstances[id].destroy();
-        delete chartInstances[id];
-    }
-}
-
-// ═══════════════════════════════════════════════════
-// Helpers
-// ═══════════════════════════════════════════════════
-
-function fmt(v, suffix = '') {
-    if (v == null) return 'N/A';
-    return v + suffix;
-}
-
-function fmtSign(v, suffix = '') {
-    if (v == null) return 'N/A';
-    return (v >= 0 ? '+' : '') + v + suffix;
-}
-
-function metricCard(label, value, isPositive, sub = '') {
-    const cls = isPositive ? 'positive' : 'negative';
-    return `<div class="metric-card">
-        <div class="label">${label}</div>
-        <div class="value ${cls}">${value}</div>
-        ${sub ? `<div class="sub">${sub}</div>` : ''}
-    </div>`;
-}
-
-function indexOfMax(arr) {
-    let max = -Infinity, idx = -1;
-    arr.forEach((v, i) => { if (v != null && v > max) { max = v; idx = i; } });
-    return idx;
-}
-
-function indexOfMin(arr) {
-    let min = Infinity, idx = -1;
-    arr.forEach((v, i) => { if (v != null && v < min) { min = v; idx = i; } });
-    return idx;
 }
 
 // ═══════════════════════════════════════════════════
 // Init
 // ═══════════════════════════════════════════════════
-
-loadOverview();
+loadConsistency();

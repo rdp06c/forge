@@ -5,9 +5,9 @@ import { join } from 'path';
 
 const PORTFOLIOS_DIR = join(import.meta.dirname, '..', 'portfolios');
 
-export function createBacktestPortfolio(initialBalance, strategyName) {
+export function createBacktestPortfolio(initialBalance, strategyName, opts = {}) {
     return {
-        cash: initialBalance || STARTING_BALANCE,
+        cash: opts.unconstrained ? Infinity : (initialBalance || STARTING_BALANCE),
         initialBalance: initialBalance || STARTING_BALANCE,
         holdings: {},
         transactions: [],
@@ -21,6 +21,7 @@ export function createBacktestPortfolio(initialBalance, strategyName) {
         spyBaseline: null,
         spyCurrent: null,
         strategy: strategyName || 'baseline',
+        unconstrained: !!opts.unconstrained,
     };
 }
 

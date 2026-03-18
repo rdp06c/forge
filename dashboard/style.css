@@ -383,6 +383,266 @@ tr.attr-row td {
 .attribution-table { max-width: 500px; }
 .attribution-table table { margin: 8px 0; }
 
+/* --- Consistency view --- */
+
+.subtitle {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-bottom: 16px;
+}
+
+.consistency-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+    min-width: 700px;
+}
+
+.consistency-table th {
+    padding: 8px 10px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.consistency-table th.sub-header {
+    font-size: 9px;
+    color: var(--text-muted);
+    border-bottom: 2px solid var(--border);
+}
+
+.consistency-table td {
+    padding: 8px 10px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+}
+
+.consistency-table .strategy-name {
+    text-align: left;
+    font-weight: 500;
+    font-size: 12px;
+    white-space: nowrap;
+}
+
+.consistency-table .positive { color: var(--green); font-weight: 600; }
+.consistency-table .negative { color: var(--red); }
+.consistency-table .no-data { color: var(--text-muted); }
+
+.consistent-row { background: rgba(34, 197, 94, 0.04); }
+.consistent-row:hover { background: rgba(34, 197, 94, 0.08); }
+.bad-row { opacity: 0.5; }
+
+.signal-card.consistent { border-color: var(--green-dim); }
+
+/* --- Matrix heatmap --- */
+
+.controls {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 16px;
+    align-items: center;
+}
+
+.controls label {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
+.controls select {
+    background: var(--bg-input);
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-family: inherit;
+    font-size: 12px;
+}
+
+.matrix-wrap {
+    overflow-x: auto;
+    margin-bottom: 20px;
+}
+
+.matrix-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 12px;
+    min-width: 800px;
+}
+
+.matrix-table th {
+    padding: 8px 6px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+}
+
+.matrix-table td {
+    padding: 8px 6px;
+    text-align: center;
+    border-bottom: 1px solid var(--border);
+}
+
+.matrix-table .signal-name {
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-primary);
+    min-width: 90px;
+}
+
+.matrix-cell {
+    cursor: pointer;
+    transition: opacity 0.15s;
+    font-weight: 500;
+}
+
+.matrix-cell:hover { opacity: 0.8; }
+
+.no-data { color: var(--text-muted); }
+
+.baseline-row { border-top: 2px solid var(--blue); }
+.baseline-row .signal-name { color: var(--blue); }
+
+.best-combos {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    padding: 16px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+}
+
+.best-combos .best {
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.best-combos strong { color: var(--text-primary); }
+
+/* --- Signal accuracy cards --- */
+
+.signal-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 16px;
+}
+
+.signal-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.signal-card.baseline {
+    border-color: var(--blue);
+}
+
+.signal-card h3 {
+    font-size: 16px;
+    margin-bottom: 8px;
+    color: var(--text-primary);
+}
+
+.signal-card .stat {
+    display: flex;
+    justify-content: space-between;
+    font-size: 12px;
+    padding: 3px 0;
+    color: var(--text-secondary);
+}
+
+.signal-card .stat span { color: var(--text-muted); }
+
+.quality-breakdown {
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+}
+
+.quality-breakdown h4 {
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 4px;
+    letter-spacing: 0.5px;
+}
+
+.quality-row {
+    font-size: 11px;
+    color: var(--text-secondary);
+    padding: 2px 0;
+}
+
+.quality-row span { color: var(--text-muted); }
+
+/* --- Detail view extras --- */
+
+.metric-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-bottom: 4px;
+}
+
+.metric-value {
+    font-size: 20px;
+    font-weight: 600;
+}
+
+.chart-container {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.chart-container canvas { max-height: 300px; }
+
+.exit-reasons { margin-bottom: 20px; }
+.exit-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+}
+.exit-row span { color: var(--text-muted); }
+
+.signal-table { margin-bottom: 20px; }
+.sig-row {
+    padding: 6px 12px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+}
+
+.trade-log { overflow-x: auto; margin-bottom: 20px; }
+.trade-log table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.trade-log th {
+    text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
+    color: var(--text-muted); font-size: 10px; text-transform: uppercase; font-weight: 600;
+}
+.trade-log td { padding: 6px 10px; border-bottom: 1px solid #1a1d27; }
+.trade-log tr.win td:nth-child(6) { color: var(--green); }
+.trade-log tr.loss td:nth-child(6) { color: var(--red); }
+
+.empty { color: var(--text-muted); text-align: center; padding: 40px; }
+.empty code { display: inline-block; background: var(--bg-card); padding: 6px 12px; border-radius: 4px; color: var(--blue); }
+.error { color: var(--red); text-align: center; padding: 40px; }
+
+h2 { font-size: 18px; margin-bottom: 16px; }
+h3 { font-size: 14px; margin: 20px 0 12px; color: var(--text-secondary); }
+
 /* --- Responsive --- */
 
 @media (max-width: 768px) {

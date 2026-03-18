@@ -3,41 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>FORGE Backtester</title>
+    <title>FORGE Signal Backtester</title>
     <link rel="stylesheet" href="/style.css">
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 </head>
 <body>
 
 <div class="header">
-    <h1>FORGE Backtester</h1>
-    <span class="header-sub">Deterministic Strategy Simulation for APEX</span>
+    <h1>FORGE Signal Backtester</h1>
+    <span class="header-sub">Signal x Exit Strategy Matrix for APEX</span>
 </div>
 
 <nav class="nav">
-    <button class="active" data-view="overview">Results</button>
-    <button data-view="detail" id="detail-tab" style="display:none">Strategy Detail</button>
-    <button data-view="comparison">Comparison</button>
+    <button class="active" data-view="consistency">Consistency</button>
+    <button data-view="matrix">Matrix</button>
+    <button data-view="signals">Signal Accuracy</button>
+    <button data-view="detail" id="detail-tab" style="display:none">Detail</button>
+    <button data-view="results">All Results</button>
     <button data-view="mytrades">My Trades</button>
 </nav>
 
-<!-- View 1: Results Overview -->
-<div id="view-overview" class="view active">
-    <div id="results-list"></div>
+<!-- View 0: Cross-Timeframe Consistency -->
+<div id="view-consistency" class="view active">
+    <div id="consistency-content"></div>
 </div>
 
-<!-- View 2: Strategy Detail -->
+<!-- View 1: Matrix Heatmap -->
+<div id="view-matrix" class="view">
+    <div class="controls">
+        <label>Metric: <select id="matrix-metric">
+            <option value="totalReturn">Total Return %</option>
+            <option value="winRate">Win Rate %</option>
+            <option value="sharpe">Sharpe Ratio</option>
+            <option value="profitFactor">Profit Factor</option>
+            <option value="maxDrawdown">Max Drawdown %</option>
+        </select></label>
+    </div>
+    <div id="matrix-content"></div>
+</div>
+
+<!-- View 2: Signal Accuracy -->
+<div id="view-signals" class="view">
+    <div id="signals-content"></div>
+</div>
+
+<!-- View 3: Strategy Detail -->
 <div id="view-detail" class="view">
-    <button class="back-btn" onclick="showView('overview')">&larr; Back</button>
+    <button class="back-btn" onclick="showView('matrix')">&larr; Back</button>
     <div id="detail-content"></div>
 </div>
 
-<!-- View 3: Comparison -->
-<div id="view-comparison" class="view">
-    <div id="comparison-content"></div>
+<!-- View 4: All Results -->
+<div id="view-results" class="view">
+    <div id="results-list"></div>
 </div>
 
-<!-- View 4: My Trades -->
+<!-- View 5: My Trades -->
 <div id="view-mytrades" class="view">
     <div id="mytrades-content"></div>
 </div>

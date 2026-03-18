@@ -79,20 +79,22 @@ export function calculatePositionSize(portfolio, conviction, regime, currentPric
  * Execute a BUY trade
  * @param {string} [opts.simDate] - Simulation date (ISO string or YYYY-MM-DD). Omit for live.
  */
-export function executeBuy(portfolio, { symbol, shares, price, conviction, reasoning, marketData, vix, agentName, simDate }) {
+export function executeBuy(portfolio, { symbol, shares, price, conviction, reasoning, marketData, vix, agentName, simDate, signalCode, signalQuality }) {
     const now = simDate ? new Date(simDate + 'T16:00:00Z') : new Date();
 
-    // Rebuy cooldown: 5-day block after selling a symbol
-    const blocked = (portfolio.blockedTrades || []).find(
-        b => b.symbol === symbol && new Date(b.blockedUntil) > now
-    );
-    if (blocked) {
-        console.log(`  [${agentName}] Rebuy cooldown: ${symbol} blocked until ${blocked.blockedUntil.split('T')[0]}`);
-        return false;
+    // Rebuy cooldown: 5-day block after selling a symbol (skip in unconstrained)
+    if (!portfolio.unconstrained) {
+        const blocked = (portfolio.blockedTrades || []).find(
+            b => b.symbol === symbol && new Date(b.blockedUntil) > now
+        );
+        if (blocked) {
+            console.log(`  [${agentName}] Rebuy cooldown: ${symbol} blocked until ${blocked.blockedUntil.split('T')[0]}`);
+            return false;
+        }
     }
 
     const cost = price * shares;
-    if (portfolio.cash < cost) {
+    if (!portfolio.unconstrained && portfolio.cash < cost) {
         console.log(`  [${agentName}] Insufficient cash for ${shares} ${symbol} @ $${price} (need $${cost.toFixed(2)}, have $${portfolio.cash.toFixed(2)})`);
         return false;
     }
@@ -111,6 +113,8 @@ export function executeBuy(portfolio, { symbol, shares, price, conviction, reaso
         timestamp: now.toISOString(),
         conviction,
         reasoning,
+        signalCode: signalCode || null,
+        signalQuality: signalQuality || null,
         entryTechnicals: {
             momentumScore: marketData?.[symbol]?.momentum?.score || null,
             todayChange: marketData?.[symbol]?.momentum?.todayChange ?? marketData?.[symbol]?.changePercent ?? null,
@@ -152,6 +156,9 @@ export function executeBuy(portfolio, { symbol, shares, price, conviction, reaso
             entryCompositeScore: marketData?.[symbol]?.compositeScore ?? null,
             entryBreakdown: marketData?.[symbol]?.scoreBreakdown || null,
             entryVIX: vix?.level ?? null,
+            signalCode: signalCode || null,
+            signalQuality: signalQuality || null,
+            highWaterMark: price, // For trailing stops — updated each sim day
         };
     }
 
@@ -193,9 +200,9 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
 
     const now = simDate ? new Date(simDate + 'T16:00:00Z') : new Date();
 
-    // Anti-whipsaw: block same-day sells
+    // Anti-whipsaw and hold discipline (skip in unconstrained)
     const buys = getCurrentPositionBuys(portfolio, symbol);
-    if (buys.length > 0) {
+    if (!portfolio.unconstrained && buys.length > 0) {
         const buyDateStr = new Date(buys[0].timestamp).toISOString().split('T')[0];
         const nowDateStr = now.toISOString().split('T')[0];
         if (buyDateStr === nowDateStr) {
@@ -283,6 +290,8 @@ export function executeSell(portfolio, { symbol, shares, price, conviction, reas
             exitReasoning: reasoning || '',
             exitConviction: conviction || null,
             exitMarketRegime: portfolio.lastMarketRegime?.regime || null,
+            signalCode: thesis?.signalCode || null,
+            signalQuality: thesis?.signalQuality || null,
             tracking: { priceAfter1Week: null, priceAfter1Month: null, tracked: false },
             agent: agentName || 'backtester',
             forgeMetadata: forgeMetadata || {},
